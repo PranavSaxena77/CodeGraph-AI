@@ -32,6 +32,8 @@ class ImportRecord(BaseModel):
     local_name: str
     start_line: int = Field(ge=1)
     end_line: int = Field(ge=1)
+    resolved_file_id: str | None = None
+    resolution: ReferenceResolution = "unresolved"
 
 
 class InheritanceRecord(BaseModel):

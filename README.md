@@ -1,6 +1,6 @@
 # CodeGraph AI
 
-CodeGraph AI is an AI-powered repository intelligence and pull-request review platform. This foundation provides a modular FastAPI backend, a minimal React/Vite dashboard, local MongoDB and Neo4j services, and public GitHub repository ingestion. Structural parsing, retrieval, AI, and review behavior are intentionally not implemented yet.
+CodeGraph AI is an AI-powered repository intelligence and pull-request review platform. This foundation provides a modular FastAPI backend, a minimal React/Vite dashboard, public GitHub repository ingestion, deterministic Python analysis, and a Neo4j code graph. Retrieval, AI, and review behavior are intentionally not implemented yet.
 
 ## Prerequisites
 
@@ -16,13 +16,13 @@ backend/              FastAPI modular monolith and tests
   app/core/           Runtime configuration
   app/domain/         Provider-independent models
   app/services/       Application services and interfaces
-  app/modules/        Future feature boundaries
+  app/modules/        Ingestion, analysis, graph, and future feature boundaries
 frontend/             React/Vite dashboard and API service layer
 docs/                 Architecture and delivery scope
 compose.yaml          Local MongoDB and Neo4j services
 ```
 
-Feature packages under `backend/app/modules` separate the implemented ingestion and GitHub adapters from the reserved analysis, graph, retrieval, AI, and pull-request review boundaries.
+Feature packages under `backend/app/modules` separate ingestion, analysis, graph persistence, retrieval, AI, GitHub, and pull-request review responsibilities.
 
 ## Local setup
 
@@ -59,6 +59,8 @@ The API is available at `http://localhost:8000`:
 - `GET /api/v1/repositories/{repository_id}` returns stored repository metadata.
 - `GET /api/v1/repositories/{repository_id}/snapshots/{snapshot_id}` returns snapshot status and discovery metadata.
 - `POST /api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/analysis` returns deterministic Python structural analysis for an ingested snapshot.
+- `POST /api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/graph` analyzes and idempotently persists a snapshot code graph.
+- `GET /api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/graph` returns graph persistence status and counts.
 - Interactive API documentation is at `/docs`.
 
 ### Frontend
@@ -133,7 +135,7 @@ All runtime configuration comes from environment variables. Backend settings als
 | `MONGO_ROOT_USERNAME`, `MONGO_ROOT_PASSWORD` | Local MongoDB initialization credentials |
 | `NEO4J_HOST`, `NEO4J_BOLT_PORT` | Backend Neo4j readiness target |
 | `NEO4J_BIND_HOST`, `NEO4J_HTTP_PORT` | Host interface and browser port for local Neo4j |
-| `NEO4J_USERNAME`, `NEO4J_PASSWORD` | Local Neo4j credentials |
+| `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `NEO4J_DATABASE` | Neo4j credentials and database |
 | `GITHUB_API_BASE_URL`, `GITHUB_TIMEOUT_SECONDS` | Public GitHub REST API configuration |
 | `MAX_ARCHIVE_*` | Repository archive safety limits |
 
@@ -145,13 +147,13 @@ Implemented now:
 - Dependency readiness abstraction with MongoDB and Neo4j TCP checks.
 - Public GitHub repository registration, immutable ref resolution, bounded archive download, safe extraction, Python-file discovery, and MongoDB metadata persistence.
 - Deterministic Python AST analysis for files, classes, functions, methods, imports, inheritance, and conservative call references.
+- Idempotent Neo4j snapshot graphs with scoped symbol, containment, call, import, dependency, and neighbor queries.
 - Minimal React dashboard with an API service layer.
 - Database-only Docker Compose configuration with persistent volumes and health checks.
 - Backend and frontend tests that do not need external services.
 
 Explicitly deferred:
 
-- Neo4j graph writes.
 - FAISS and embeddings.
 - Gemini, LangChain, and LangGraph.
 - GitHub pull-request analysis and reviews.

@@ -497,11 +497,64 @@ class PythonAstAnalyzer:
         return SnapshotAnalysis(
             snapshot_id=snapshot_id,
             symbols=sorted(symbols, key=self._record_sort_key),
-            imports=sorted(imports, key=self._record_sort_key),
+            imports=sorted(
+                self._resolve_imports(symbols, imports),
+                key=self._record_sort_key,
+            ),
             inheritances=sorted(inheritances, key=self._record_sort_key),
             calls=sorted(calls, key=self._record_sort_key),
             diagnostics=sorted(diagnostics, key=self._diagnostic_sort_key),
         )
+
+    @staticmethod
+    def _resolve_imports(
+        symbols: list[StructuralSymbol], imports: list[ImportRecord]
+    ) -> list[ImportRecord]:
+        module_files = {
+            symbol.qualified_name: symbol.id for symbol in symbols if symbol.symbol_type == "file"
+        }
+        resolved: list[ImportRecord] = []
+        for record in imports:
+            module_name = PythonAstAnalyzer._absolute_import_module(record, module_files)
+            resolved_file_id = module_files.get(module_name) if module_name else None
+            resolved.append(
+                record.model_copy(
+                    update={
+                        "resolved_file_id": resolved_file_id,
+                        "resolution": "resolved" if resolved_file_id else "unresolved",
+                    }
+                )
+            )
+        return resolved
+
+    @staticmethod
+    def _absolute_import_module(record: ImportRecord, module_files: dict[str, str]) -> str | None:
+        if not record.module.startswith("."):
+            return record.module
+
+        level = len(record.module) - len(record.module.lstrip("."))
+        relative_module = record.module[level:]
+        current_module = _module_name(record.file_path)
+        package_parts = current_module.split(".")
+        if Path(record.file_path).name != "__init__.py":
+            package_parts.pop()
+        parents_to_remove = level - 1
+        if parents_to_remove > len(package_parts):
+            return None
+        if parents_to_remove:
+            package_parts = package_parts[:-parents_to_remove]
+
+        base_parts = [*package_parts]
+        if relative_module:
+            base_parts.extend(relative_module.split("."))
+        base_module = ".".join(base_parts)
+        if relative_module or record.imported_name is None:
+            return base_module
+
+        imported_module = ".".join([*base_parts, record.imported_name])
+        if imported_module in module_files:
+            return imported_module
+        return base_module
 
     def _analyze_file(
         self, snapshot_id: str, repository_root: Path, relative_path: Path
