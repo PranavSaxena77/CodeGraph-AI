@@ -1,6 +1,6 @@
 # CodeGraph AI
 
-CodeGraph AI is an AI-powered repository intelligence and pull-request review platform. This foundation provides a modular FastAPI backend, a minimal React/Vite dashboard, and local MongoDB and Neo4j services. Repository ingestion, parsing, retrieval, AI, and review behavior are intentionally not implemented yet.
+CodeGraph AI is an AI-powered repository intelligence and pull-request review platform. This foundation provides a modular FastAPI backend, a minimal React/Vite dashboard, local MongoDB and Neo4j services, and public GitHub repository ingestion. Structural parsing, retrieval, AI, and review behavior are intentionally not implemented yet.
 
 ## Prerequisites
 
@@ -22,7 +22,7 @@ docs/                 Architecture and delivery scope
 compose.yaml          Local MongoDB and Neo4j services
 ```
 
-The empty feature packages under `backend/app/modules` reserve clear boundaries for ingestion, analysis, graph access, retrieval, AI providers, GitHub integration, and pull-request reviews without implementing those features prematurely.
+Feature packages under `backend/app/modules` separate the implemented ingestion and GitHub adapters from the reserved analysis, graph, retrieval, AI, and pull-request review boundaries.
 
 ## Local setup
 
@@ -55,6 +55,9 @@ The API is available at `http://localhost:8000`:
 
 - `GET /api/v1/health` reports process health without external connections.
 - `GET /api/v1/ready` returns `200` when MongoDB and Neo4j are reachable, otherwise `503`.
+- `POST /api/v1/repositories` registers and indexes a public GitHub repository snapshot.
+- `GET /api/v1/repositories/{repository_id}` returns stored repository metadata.
+- `GET /api/v1/repositories/{repository_id}/snapshots/{snapshot_id}` returns snapshot status and discovery metadata.
 - Interactive API documentation is at `/docs`.
 
 ### Frontend
@@ -125,10 +128,13 @@ All runtime configuration comes from environment variables. Backend settings als
 | `VITE_API_BASE_URL` | Frontend API base URL |
 | `MONGODB_HOST`, `MONGODB_PORT` | Backend MongoDB readiness target |
 | `MONGODB_BIND_HOST` | Host interface used for the local MongoDB port |
+| `MONGODB_DATABASE` | MongoDB metadata database |
 | `MONGO_ROOT_USERNAME`, `MONGO_ROOT_PASSWORD` | Local MongoDB initialization credentials |
 | `NEO4J_HOST`, `NEO4J_BOLT_PORT` | Backend Neo4j readiness target |
 | `NEO4J_BIND_HOST`, `NEO4J_HTTP_PORT` | Host interface and browser port for local Neo4j |
 | `NEO4J_USERNAME`, `NEO4J_PASSWORD` | Local Neo4j credentials |
+| `GITHUB_API_BASE_URL`, `GITHUB_TIMEOUT_SECONDS` | Public GitHub REST API configuration |
+| `MAX_ARCHIVE_*` | Repository archive safety limits |
 
 ## Current scope
 
@@ -136,14 +142,15 @@ Implemented now:
 
 - FastAPI application factory and versioned health/readiness API.
 - Dependency readiness abstraction with MongoDB and Neo4j TCP checks.
+- Public GitHub repository registration, immutable ref resolution, bounded archive download, safe extraction, Python-file discovery, and MongoDB metadata persistence.
 - Minimal React dashboard with an API service layer.
 - Database-only Docker Compose configuration with persistent volumes and health checks.
 - Backend and frontend tests that do not need external services.
 
 Explicitly deferred:
 
-- Repository ingestion and source parsing.
-- Neo4j graph writes and MongoDB persistence adapters.
+- AST parsing and structural source analysis.
+- Neo4j graph writes.
 - FAISS and embeddings.
 - Gemini, LangChain, and LangGraph.
 - GitHub pull-request analysis and reviews.

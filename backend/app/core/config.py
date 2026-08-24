@@ -1,7 +1,8 @@
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote_plus
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
@@ -21,14 +22,35 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     mongodb_host: str = "127.0.0.1"
     mongodb_port: int = Field(default=27017, ge=1, le=65535)
+    mongodb_database: str = "codegraph_ai"
+    mongo_root_username: str | None = None
+    mongo_root_password: SecretStr | None = None
     neo4j_host: str = "127.0.0.1"
     neo4j_bolt_port: int = Field(default=7687, ge=1, le=65535)
     dependency_timeout_seconds: float = Field(default=1.0, gt=0, le=10)
+    github_api_base_url: str = "https://api.github.com"
+    github_timeout_seconds: float = Field(default=15.0, gt=0, le=60)
+    max_archive_bytes: int = Field(default=25_000_000, ge=1)
+    max_archive_members: int = Field(default=10_000, ge=1)
+    max_extracted_bytes: int = Field(default=100_000_000, ge=1)
+    max_archive_member_bytes: int = Field(default=25_000_000, ge=1)
 
     @property
     def cors_origin_list(self) -> list[str]:
         """Return normalized CORS origins from a comma-separated setting."""
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def mongodb_uri(self) -> str:
+        """Build a local MongoDB URI without logging or exposing credentials."""
+        if self.mongo_root_username and self.mongo_root_password:
+            username = quote_plus(self.mongo_root_username)
+            password = quote_plus(self.mongo_root_password.get_secret_value())
+            return (
+                f"mongodb://{username}:{password}@{self.mongodb_host}:{self.mongodb_port}"
+                "/?authSource=admin"
+            )
+        return f"mongodb://{self.mongodb_host}:{self.mongodb_port}"
 
 
 @lru_cache
