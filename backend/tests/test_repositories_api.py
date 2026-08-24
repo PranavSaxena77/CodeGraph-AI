@@ -4,8 +4,10 @@ from zipfile import ZipFile
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.v1.repositories import get_repository_service
+from app.api.v1.repositories import get_analysis_service, get_repository_service
 from app.main import app
+from app.modules.analysis.python_ast import PythonAstAnalyzer
+from app.modules.analysis.service import SnapshotAnalysisService
 from app.modules.ingestion.archive import SafeZipExtractor
 from app.modules.ingestion.service import RepositoryIngestionService
 from tests.fakes import FakeGithubClient, InMemoryMetadataStore
@@ -21,12 +23,21 @@ def build_archive() -> bytes:
 @pytest.fixture
 def api() -> tuple[TestClient, InMemoryMetadataStore]:
     store = InMemoryMetadataStore()
+    github = FakeGithubClient(build_archive())
+    extractor = SafeZipExtractor(100, 100_000, 10_000)
     service = RepositoryIngestionService(
-        github=FakeGithubClient(build_archive()),
+        github=github,
         store=store,
-        extractor=SafeZipExtractor(100, 100_000, 10_000),
+        extractor=extractor,
+    )
+    analysis_service = SnapshotAnalysisService(
+        github=github,
+        store=store,
+        extractor=extractor,
+        analyzer=PythonAstAnalyzer(),
     )
     app.dependency_overrides[get_repository_service] = lambda: service
+    app.dependency_overrides[get_analysis_service] = lambda: analysis_service
     with TestClient(app) as client:
         yield client, store
     app.dependency_overrides.clear()
@@ -71,6 +82,27 @@ def test_api_registration_is_idempotent(api: tuple[TestClient, InMemoryMetadataS
     assert second.status_code == 201
     assert second.json()["idempotent"] is True
     assert first.json()["snapshot"]["id"] == second.json()["snapshot"]["id"]
+
+
+def test_api_analyzes_an_ingested_snapshot(api: tuple[TestClient, InMemoryMetadataStore]) -> None:
+    client, _store = api
+    registration = client.post(
+        "/api/v1/repositories",
+        json={"github_url": "https://github.com/octocat/hello-python"},
+    ).json()
+
+    repository_id = registration["repository"]["id"]
+    snapshot_id = registration["snapshot"]["id"]
+    response = client.post(f"/api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/analysis")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["snapshot_id"] == snapshot_id
+    assert [symbol["qualified_name"] for symbol in payload["symbols"]] == [
+        "main",
+        "main.main",
+    ]
+    assert payload["diagnostics"] == []
 
 
 def test_api_rejects_invalid_repository_url(api: tuple[TestClient, InMemoryMetadataStore]) -> None:

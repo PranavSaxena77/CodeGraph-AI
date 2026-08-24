@@ -12,14 +12,18 @@ from app.core.errors import (
     MetadataStoreError,
     RepositoryNotFoundError,
     SnapshotNotFoundError,
+    SnapshotNotReadyError,
     UnsafeArchiveError,
 )
+from app.domain.analysis import SnapshotAnalysis
 from app.domain.repositories import (
     RepositoryMetadata,
     RepositoryRegistrationRequest,
     RepositoryRegistrationResponse,
     SnapshotMetadata,
 )
+from app.modules.analysis.python_ast import PythonAstAnalyzer
+from app.modules.analysis.service import SnapshotAnalysisService
 from app.modules.github.rest import GithubRestClient
 from app.modules.ingestion.archive import SafeZipExtractor
 from app.modules.ingestion.service import RepositoryIngestionService
@@ -47,6 +51,28 @@ def get_repository_service() -> RepositoryIngestionService:
 
 
 RepositoryService = Annotated[RepositoryIngestionService, Depends(get_repository_service)]
+
+
+@lru_cache
+def get_analysis_service() -> SnapshotAnalysisService:
+    settings = get_settings()
+    return SnapshotAnalysisService(
+        github=GithubRestClient(
+            api_base_url=settings.github_api_base_url,
+            timeout_seconds=settings.github_timeout_seconds,
+            max_archive_bytes=settings.max_archive_bytes,
+        ),
+        store=MongoMetadataStore(settings),
+        extractor=SafeZipExtractor(
+            max_members=settings.max_archive_members,
+            max_extracted_bytes=settings.max_extracted_bytes,
+            max_file_bytes=settings.max_archive_member_bytes,
+        ),
+        analyzer=PythonAstAnalyzer(),
+    )
+
+
+AnalysisService = Annotated[SnapshotAnalysisService, Depends(get_analysis_service)]
 
 
 @router.post(
@@ -95,5 +121,30 @@ def get_snapshot(
         return service.get_snapshot(repository_id, snapshot_id)
     except SnapshotNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except MetadataStoreError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@router.post(
+    "/{repository_id}/snapshots/{snapshot_id}/analysis",
+    response_model=SnapshotAnalysis,
+)
+def analyze_snapshot(
+    repository_id: str,
+    snapshot_id: str,
+    service: AnalysisService,
+) -> SnapshotAnalysis:
+    try:
+        return service.analyze_snapshot(repository_id, snapshot_id)
+    except (RepositoryNotFoundError, SnapshotNotFoundError) as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except SnapshotNotReadyError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except (UnsafeArchiveError, ArchiveLimitError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except GithubRepositoryNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except GithubServiceError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
     except MetadataStoreError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error

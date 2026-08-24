@@ -58,6 +58,7 @@ The API is available at `http://localhost:8000`:
 - `POST /api/v1/repositories` registers and indexes a public GitHub repository snapshot.
 - `GET /api/v1/repositories/{repository_id}` returns stored repository metadata.
 - `GET /api/v1/repositories/{repository_id}/snapshots/{snapshot_id}` returns snapshot status and discovery metadata.
+- `POST /api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/analysis` returns deterministic Python structural analysis for an ingested snapshot.
 - Interactive API documentation is at `/docs`.
 
 ### Frontend
@@ -143,13 +144,13 @@ Implemented now:
 - FastAPI application factory and versioned health/readiness API.
 - Dependency readiness abstraction with MongoDB and Neo4j TCP checks.
 - Public GitHub repository registration, immutable ref resolution, bounded archive download, safe extraction, Python-file discovery, and MongoDB metadata persistence.
+- Deterministic Python AST analysis for files, classes, functions, methods, imports, inheritance, and conservative call references.
 - Minimal React dashboard with an API service layer.
 - Database-only Docker Compose configuration with persistent volumes and health checks.
 - Backend and frontend tests that do not need external services.
 
 Explicitly deferred:
 
-- AST parsing and structural source analysis.
 - Neo4j graph writes.
 - FAISS and embeddings.
 - Gemini, LangChain, and LangGraph.
