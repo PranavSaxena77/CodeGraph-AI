@@ -7,6 +7,8 @@ import pytest
 
 from app.core.errors import InvalidGithubUrlError, UnsafeArchiveError
 from app.domain.repositories import RepositoryRegistrationRequest
+from app.modules.analysis.python_ast import PythonAstAnalyzer
+from app.modules.analysis.service import SnapshotAnalysisService
 from app.modules.ingestion.archive import SafeZipExtractor, discover_python_files
 from app.modules.ingestion.service import RepositoryIngestionService
 from app.modules.ingestion.url import parse_github_repository_url
@@ -139,3 +141,28 @@ def test_registration_uses_default_branch_when_ref_is_omitted() -> None:
 
     assert github.resolved_refs == ["main"]
     assert result.snapshot.ref == "main"
+
+
+def test_analysis_service_reuses_ingested_snapshot_identity() -> None:
+    github = FakeGithubClient(build_zip({"project-sha/main.py": "def main():\n    pass\n"}))
+    store = InMemoryMetadataStore()
+    extractor = SafeZipExtractor(10, 10_000, 1_000)
+    ingestion = RepositoryIngestionService(github=github, store=store, extractor=extractor)
+    registration = ingestion.register(
+        RepositoryRegistrationRequest(github_url="https://github.com/octocat/hello-python")
+    )
+    analysis_service = SnapshotAnalysisService(
+        github=github,
+        store=store,
+        extractor=extractor,
+        analyzer=PythonAstAnalyzer(),
+    )
+
+    analysis = analysis_service.analyze_snapshot(
+        registration.repository.id,
+        registration.snapshot.id,
+    )
+
+    assert analysis.snapshot_id == registration.snapshot.id
+    assert [symbol.qualified_name for symbol in analysis.symbols] == ["main", "main.main"]
+    assert github.download_count == 2

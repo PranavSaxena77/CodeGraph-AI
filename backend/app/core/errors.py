@@ -30,5 +30,9 @@ class SnapshotNotFoundError(ApplicationError):
     pass
 
 
+class SnapshotNotReadyError(ApplicationError):
+    pass
+
+
 class MetadataStoreError(ApplicationError):
     pass
