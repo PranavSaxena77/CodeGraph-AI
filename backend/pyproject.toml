@@ -9,14 +9,15 @@ description = "CodeGraph AI modular FastAPI backend"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.115,<1",
+    "httpx>=0.27,<1",
     "pydantic>=2.10,<3",
     "pydantic-settings>=2.7,<3",
+    "pymongo>=4.10,<5",
     "uvicorn>=0.34,<1",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "httpx>=0.27,<1",
     "mypy>=1.14,<2",
     "pytest>=8,<9",
     "ruff>=0.9,<1",
