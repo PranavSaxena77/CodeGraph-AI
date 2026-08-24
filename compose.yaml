@@ -1,0 +1,50 @@
+name: codegraph-ai
+
+services:
+  mongodb:
+    image: ${MONGO_IMAGE:-mongo:8.0}
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:?Set MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD}
+    ports:
+      - "${MONGODB_BIND_HOST:-127.0.0.1}:${MONGODB_PORT:-27017}:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet --host localhost --port 27017
+          --username "$${MONGO_INITDB_ROOT_USERNAME}"
+          --password "$${MONGO_INITDB_ROOT_PASSWORD}"
+          --authenticationDatabase admin
+          --eval "quit(db.adminCommand('ping').ok ? 0 : 2)"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  neo4j:
+    image: ${NEO4J_IMAGE:-neo4j:5.26-community}
+    environment:
+      NEO4J_AUTH: ${NEO4J_USERNAME:?Set NEO4J_USERNAME}/${NEO4J_PASSWORD:?Set NEO4J_PASSWORD}
+    ports:
+      - "${NEO4J_BIND_HOST:-127.0.0.1}:${NEO4J_HTTP_PORT:-7474}:7474"
+      - "${NEO4J_BIND_HOST:-127.0.0.1}:${NEO4J_BOLT_PORT:-7687}:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          cypher-shell --username "$${NEO4J_AUTH%%/*}"
+          --password "$${NEO4J_AUTH#*/}"
+          "RETURN 1"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  mongodb_data:
+  neo4j_data:

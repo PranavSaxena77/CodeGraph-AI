@@ -1,0 +1,29 @@
+# Secrets and local environment configuration
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Frontend
+node_modules/
+dist/
+coverage/
+*.log
+
+# Local application data
+.data/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
