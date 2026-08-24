@@ -36,3 +36,11 @@ class SnapshotNotReadyError(ApplicationError):
 
 class MetadataStoreError(ApplicationError):
     pass
+
+
+class GraphStoreError(ApplicationError):
+    pass
+
+
+class GraphSnapshotNotFoundError(ApplicationError):
+    pass

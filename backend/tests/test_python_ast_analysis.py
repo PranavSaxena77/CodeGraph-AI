@@ -155,6 +155,26 @@ from package.tools import helper as renamed
     ]
 
 
+def test_resolves_only_imports_with_known_snapshot_modules(tmp_path: Path) -> None:
+    analysis = analyze_sources(
+        tmp_path,
+        {
+            "pkg/__init__.py": "",
+            "pkg/helpers.py": "def helper():\n    pass\n",
+            "pkg/main.py": "from . import helpers\nimport missing\n",
+        },
+    )
+    files = {
+        symbol.file_path: symbol for symbol in analysis.symbols if symbol.symbol_type == "file"
+    }
+    imports = {record.module: record for record in analysis.imports}
+
+    assert imports["."].resolution == "resolved"
+    assert imports["."].resolved_file_id == files["pkg/helpers.py"].id
+    assert imports["missing"].resolution == "unresolved"
+    assert imports["missing"].resolved_file_id is None
+
+
 def test_resolves_only_conservative_same_file_calls(tmp_path: Path) -> None:
     analysis = analyze_sources(
         tmp_path,

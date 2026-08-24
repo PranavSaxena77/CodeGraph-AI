@@ -4,12 +4,18 @@ from zipfile import ZipFile
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.v1.repositories import get_analysis_service, get_repository_service
+from app.api.v1.repositories import (
+    get_analysis_service,
+    get_graph_service,
+    get_repository_service,
+)
 from app.main import app
 from app.modules.analysis.python_ast import PythonAstAnalyzer
 from app.modules.analysis.service import SnapshotAnalysisService
+from app.modules.graph.service import GraphPersistenceService
 from app.modules.ingestion.archive import SafeZipExtractor
 from app.modules.ingestion.service import RepositoryIngestionService
+from tests.fake_graph import FakeGraphStore
 from tests.fakes import FakeGithubClient, InMemoryMetadataStore
 
 
@@ -36,8 +42,10 @@ def api() -> tuple[TestClient, InMemoryMetadataStore]:
         extractor=extractor,
         analyzer=PythonAstAnalyzer(),
     )
+    graph_service = GraphPersistenceService(store, analysis_service, FakeGraphStore())
     app.dependency_overrides[get_repository_service] = lambda: service
     app.dependency_overrides[get_analysis_service] = lambda: analysis_service
+    app.dependency_overrides[get_graph_service] = lambda: graph_service
     with TestClient(app) as client:
         yield client, store
     app.dependency_overrides.clear()
@@ -103,6 +111,32 @@ def test_api_analyzes_an_ingested_snapshot(api: tuple[TestClient, InMemoryMetada
         "main.main",
     ]
     assert payload["diagnostics"] == []
+
+
+def test_api_persists_graph_and_returns_idempotent_status(
+    api: tuple[TestClient, InMemoryMetadataStore],
+) -> None:
+    client, _store = api
+    registration = client.post(
+        "/api/v1/repositories",
+        json={"github_url": "https://github.com/octocat/hello-python"},
+    ).json()
+    repository_id = registration["repository"]["id"]
+    snapshot_id = registration["snapshot"]["id"]
+    path = f"/api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/graph"
+
+    first = client.post(path)
+    status_response = client.get(path)
+    second = client.post(path)
+
+    assert first.status_code == 200
+    assert first.json()["idempotent"] is False
+    assert first.json()["node_count"] == 4
+    assert first.json()["relationship_count"] == 3
+    assert status_response.status_code == 200
+    assert status_response.json()["idempotent"] is True
+    assert second.status_code == 200
+    assert second.json() == status_response.json()
 
 
 def test_api_rejects_invalid_repository_url(api: tuple[TestClient, InMemoryMetadataStore]) -> None:

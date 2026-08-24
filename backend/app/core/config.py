@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     mongo_root_password: SecretStr | None = None
     neo4j_host: str = "127.0.0.1"
     neo4j_bolt_port: int = Field(default=7687, ge=1, le=65535)
+    neo4j_username: str = "neo4j"
+    neo4j_password: SecretStr | None = None
+    neo4j_database: str = "neo4j"
     dependency_timeout_seconds: float = Field(default=1.0, gt=0, le=10)
     github_api_base_url: str = "https://api.github.com"
     github_timeout_seconds: float = Field(default=15.0, gt=0, le=60)
@@ -51,6 +54,11 @@ class Settings(BaseSettings):
                 "/?authSource=admin"
             )
         return f"mongodb://{self.mongodb_host}:{self.mongodb_port}"
+
+    @property
+    def neo4j_uri(self) -> str:
+        """Build the configured Neo4j Bolt URI without embedding credentials."""
+        return f"bolt://{self.neo4j_host}:{self.neo4j_bolt_port}"
 
 
 @lru_cache
