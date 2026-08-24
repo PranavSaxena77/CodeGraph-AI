@@ -33,6 +33,16 @@ class Settings(BaseSettings):
     dependency_timeout_seconds: float = Field(default=1.0, gt=0, le=10)
     github_api_base_url: str = "https://api.github.com"
     github_timeout_seconds: float = Field(default=15.0, gt=0, le=60)
+    embedding_provider: str = "deterministic-local"
+    embedding_fake_dimension: int = Field(default=128, ge=1)
+    gemini_api_key: SecretStr | None = None
+    gemini_embedding_model: str = "gemini-embedding-001"
+    gemini_embedding_dimension: int = Field(default=768, ge=1)
+    gemini_api_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    gemini_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
+    embedding_batch_size: int = Field(default=32, ge=1, le=100)
+    vector_index_root: Path = Path(".data/vector_indexes")
+    max_chunk_chars: int = Field(default=8_000, ge=100)
     max_archive_bytes: int = Field(default=25_000_000, ge=1)
     max_archive_members: int = Field(default=10_000, ge=1)
     max_extracted_bytes: int = Field(default=100_000_000, ge=1)

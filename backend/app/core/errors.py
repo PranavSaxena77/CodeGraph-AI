@@ -44,3 +44,19 @@ class GraphStoreError(ApplicationError):
 
 class GraphSnapshotNotFoundError(ApplicationError):
     pass
+
+
+class EmbeddingProviderError(ApplicationError):
+    pass
+
+
+class VectorStoreError(ApplicationError):
+    pass
+
+
+class VectorIndexNotFoundError(ApplicationError):
+    pass
+
+
+class VectorIndexCorruptError(ApplicationError):
+    pass
