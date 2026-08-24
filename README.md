@@ -1,6 +1,6 @@
 # CodeGraph AI
 
-CodeGraph AI is an AI-powered repository intelligence and pull-request review platform. This foundation provides a modular FastAPI backend, a minimal React/Vite dashboard, public GitHub repository ingestion, deterministic Python analysis, and a Neo4j code graph. Retrieval, AI, and review behavior are intentionally not implemented yet.
+CodeGraph AI is an AI-powered repository intelligence and pull-request review platform. The current foundation provides a modular FastAPI backend, a minimal React/Vite dashboard, public GitHub repository ingestion, deterministic Python analysis, a Neo4j code graph, and snapshot-scoped semantic vector retrieval.
 
 ## Prerequisites
 
@@ -61,6 +61,9 @@ The API is available at `http://localhost:8000`:
 - `POST /api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/analysis` returns deterministic Python structural analysis for an ingested snapshot.
 - `POST /api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/graph` analyzes and idempotently persists a snapshot code graph.
 - `GET /api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/graph` returns graph persistence status and counts.
+- `POST /api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/vector-index` builds or reuses a snapshot-scoped FAISS index.
+- `GET /api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/vector-index` returns vector-index status.
+- `POST /api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/vector-search` searches an indexed snapshot with a validated `query` and `top_k`.
 - Interactive API documentation is at `/docs`.
 
 ### Frontend
@@ -138,6 +141,9 @@ All runtime configuration comes from environment variables. Backend settings als
 | `NEO4J_USERNAME`, `NEO4J_PASSWORD`, `NEO4J_DATABASE` | Neo4j credentials and database |
 | `GITHUB_API_BASE_URL`, `GITHUB_TIMEOUT_SECONDS` | Public GitHub REST API configuration |
 | `MAX_ARCHIVE_*` | Repository archive safety limits |
+| `EMBEDDING_PROVIDER`, `EMBEDDING_FAKE_DIMENSION` | Embedding adapter selection and local deterministic dimension |
+| `GEMINI_API_KEY`, `GEMINI_EMBEDDING_*` | Optional Gemini embedding adapter credentials and model settings |
+| `VECTOR_INDEX_ROOT`, `MAX_CHUNK_CHARS` | Snapshot index storage and deterministic chunk-size limit |
 
 ## Current scope
 
@@ -148,12 +154,12 @@ Implemented now:
 - Public GitHub repository registration, immutable ref resolution, bounded archive download, safe extraction, Python-file discovery, and MongoDB metadata persistence.
 - Deterministic Python AST analysis for files, classes, functions, methods, imports, inheritance, and conservative call references.
 - Idempotent Neo4j snapshot graphs with scoped symbol, containment, call, import, dependency, and neighbor queries.
+- Deterministic symbol-aware chunks, replaceable embedding providers, persistent exact FAISS indexes, and evidence-preserving semantic search.
 - Minimal React dashboard with an API service layer.
 - Database-only Docker Compose configuration with persistent volumes and health checks.
 - Backend and frontend tests that do not need external services.
 
 Explicitly deferred:
 
-- FAISS and embeddings.
-- Gemini, LangChain, and LangGraph.
+- Gemini repository Q&A, LangChain, and LangGraph. A Gemini embedding adapter is available, but is optional and credential-dependent.
 - GitHub pull-request analysis and reviews.

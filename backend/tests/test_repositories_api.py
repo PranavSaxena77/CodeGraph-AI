@@ -1,4 +1,5 @@
 from io import BytesIO
+from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
@@ -8,13 +9,18 @@ from app.api.v1.repositories import (
     get_analysis_service,
     get_graph_service,
     get_repository_service,
+    get_vector_service,
 )
 from app.main import app
+from app.modules.analysis.chunking import SemanticChunker
 from app.modules.analysis.python_ast import PythonAstAnalyzer
 from app.modules.analysis.service import SnapshotAnalysisService
+from app.modules.embeddings.fake import DeterministicEmbeddingProvider
 from app.modules.graph.service import GraphPersistenceService
 from app.modules.ingestion.archive import SafeZipExtractor
 from app.modules.ingestion.service import RepositoryIngestionService
+from app.modules.vector.faiss_store import FaissVectorIndex
+from app.modules.vector.service import VectorRetrievalService
 from tests.fake_graph import FakeGraphStore
 from tests.fakes import FakeGithubClient, InMemoryMetadataStore
 
@@ -27,7 +33,7 @@ def build_archive() -> bytes:
 
 
 @pytest.fixture
-def api() -> tuple[TestClient, InMemoryMetadataStore]:
+def api(tmp_path: Path) -> tuple[TestClient, InMemoryMetadataStore]:
     store = InMemoryMetadataStore()
     github = FakeGithubClient(build_archive())
     extractor = SafeZipExtractor(100, 100_000, 10_000)
@@ -43,9 +49,17 @@ def api() -> tuple[TestClient, InMemoryMetadataStore]:
         analyzer=PythonAstAnalyzer(),
     )
     graph_service = GraphPersistenceService(store, analysis_service, FakeGraphStore())
+    vector_service = VectorRetrievalService(
+        metadata_store=store,
+        analyzer=analysis_service,
+        chunker=SemanticChunker(8_000),
+        embedding_provider=DeterministicEmbeddingProvider(32),
+        vector_index=FaissVectorIndex(tmp_path / "vectors"),
+    )
     app.dependency_overrides[get_repository_service] = lambda: service
     app.dependency_overrides[get_analysis_service] = lambda: analysis_service
     app.dependency_overrides[get_graph_service] = lambda: graph_service
+    app.dependency_overrides[get_vector_service] = lambda: vector_service
     with TestClient(app) as client:
         yield client, store
     app.dependency_overrides.clear()
@@ -137,6 +151,58 @@ def test_api_persists_graph_and_returns_idempotent_status(
     assert status_response.json()["idempotent"] is True
     assert second.status_code == 200
     assert second.json() == status_response.json()
+
+
+def test_api_builds_searches_and_reuses_vector_index(
+    api: tuple[TestClient, InMemoryMetadataStore],
+) -> None:
+    client, _store = api
+    registration = client.post(
+        "/api/v1/repositories",
+        json={"github_url": "https://github.com/octocat/hello-python"},
+    ).json()
+    repository_id = registration["repository"]["id"]
+    snapshot_id = registration["snapshot"]["id"]
+    index_path = f"/api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/vector-index"
+
+    first = client.post(index_path)
+    status_response = client.get(index_path)
+    repeated = client.post(index_path)
+    search = client.post(
+        f"/api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/vector-search",
+        json={"query": "main function", "top_k": 5},
+    )
+
+    assert first.status_code == 200
+    assert first.json()["chunk_count"] == 1
+    assert first.json()["vector_dimension"] == 32
+    assert first.json()["idempotent"] is False
+    assert status_response.status_code == 200
+    assert status_response.json()["idempotent"] is True
+    assert repeated.json() == status_response.json()
+    assert search.status_code == 200
+    assert len(search.json()["results"]) == 1
+    assert search.json()["results"][0]["file_path"] == "main.py"
+    assert search.json()["results"][0]["qualified_name"] == "main.main"
+
+
+def test_api_rejects_search_before_index_and_invalid_top_k(
+    api: tuple[TestClient, InMemoryMetadataStore],
+) -> None:
+    client, _store = api
+    registration = client.post(
+        "/api/v1/repositories",
+        json={"github_url": "https://github.com/octocat/hello-python"},
+    ).json()
+    repository_id = registration["repository"]["id"]
+    snapshot_id = registration["snapshot"]["id"]
+    path = f"/api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/vector-search"
+
+    missing = client.post(path, json={"query": "main", "top_k": 1})
+    invalid = client.post(path, json={"query": "main", "top_k": 0})
+
+    assert missing.status_code == 404
+    assert invalid.status_code == 422
 
 
 def test_api_rejects_invalid_repository_url(api: tuple[TestClient, InMemoryMetadataStore]) -> None:
