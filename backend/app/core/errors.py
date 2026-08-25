@@ -60,3 +60,7 @@ class VectorIndexNotFoundError(ApplicationError):
 
 class VectorIndexCorruptError(ApplicationError):
     pass
+
+
+class RetrievalIdentityMismatchError(ApplicationError):
+    pass

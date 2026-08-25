@@ -14,6 +14,7 @@ from app.core.errors import (
     InvalidGithubUrlError,
     MetadataStoreError,
     RepositoryNotFoundError,
+    RetrievalIdentityMismatchError,
     SnapshotNotFoundError,
     SnapshotNotReadyError,
     UnsafeArchiveError,
@@ -29,6 +30,7 @@ from app.domain.repositories import (
     RepositoryRegistrationResponse,
     SnapshotMetadata,
 )
+from app.domain.retrieval import HybridSearchRequest, HybridSearchResponse
 from app.domain.vector import VectorIndexStatus, VectorSearchRequest, VectorSearchResponse
 from app.modules.analysis.chunking import SemanticChunker
 from app.modules.analysis.python_ast import PythonAstAnalyzer
@@ -42,6 +44,7 @@ from app.modules.graph.service import GraphPersistenceService
 from app.modules.ingestion.archive import SafeZipExtractor
 from app.modules.ingestion.service import RepositoryIngestionService
 from app.modules.ingestion.store import MongoMetadataStore
+from app.modules.retrieval.service import HybridRetriever
 from app.modules.vector.faiss_store import FaissVectorIndex
 from app.modules.vector.service import VectorRetrievalService
 
@@ -169,6 +172,22 @@ def get_vector_service() -> VectorRetrievalService:
 
 
 VectorService = Annotated[VectorRetrievalService, Depends(get_vector_service)]
+
+
+@lru_cache
+def get_hybrid_retriever() -> HybridRetriever:
+    settings = get_settings()
+    return HybridRetriever(
+        vector_searcher=get_vector_service(),
+        graph_reader=get_graph_service(),
+        candidate_multiplier=settings.hybrid_candidate_multiplier,
+        max_source_characters=settings.hybrid_max_source_characters,
+        max_graph_seeds=settings.hybrid_max_graph_seeds,
+        max_neighbors_per_symbol=settings.hybrid_max_neighbors_per_symbol,
+    )
+
+
+HybridService = Annotated[HybridRetriever, Depends(get_hybrid_retriever)]
 
 
 @router.post(
@@ -355,4 +374,35 @@ def search_snapshot_vector_index(
     except EmbeddingProviderError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
     except (MetadataStoreError, VectorStoreError, VectorIndexCorruptError) as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@router.post(
+    "/{repository_id}/snapshots/{snapshot_id}/hybrid-search",
+    response_model=HybridSearchResponse,
+)
+def hybrid_search_snapshot(
+    repository_id: str,
+    snapshot_id: str,
+    request: HybridSearchRequest,
+    service: HybridService,
+) -> HybridSearchResponse:
+    try:
+        return service.search(repository_id, snapshot_id, request)
+    except (
+        RepositoryNotFoundError,
+        SnapshotNotFoundError,
+        VectorIndexNotFoundError,
+    ) as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except RetrievalIdentityMismatchError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except EmbeddingProviderError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    except (
+        MetadataStoreError,
+        VectorStoreError,
+        VectorIndexCorruptError,
+        GraphStoreError,
+    ) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error

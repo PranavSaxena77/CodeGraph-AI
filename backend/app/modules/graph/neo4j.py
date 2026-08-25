@@ -128,97 +128,162 @@ class Neo4jGraphStore:
             diagnostic_count=int(snapshot_rows[0]["diagnostic_count"] or 0),
         )
 
-    def get_symbol(self, snapshot_id: str, symbol_id: str) -> GraphNode | None:
+    def get_symbol(self, repository_id: str, snapshot_id: str, symbol_id: str) -> GraphNode | None:
         rows = self._execute(
             """
-            MATCH (node:Symbol {id: $symbol_id, snapshot_id: $snapshot_id})
+            MATCH (node:Symbol {
+                id: $symbol_id,
+                repository_id: $repository_id,
+                snapshot_id: $snapshot_id
+            })
             RETURN node
             """,
-            {"snapshot_id": snapshot_id, "symbol_id": symbol_id},
+            {
+                "repository_id": repository_id,
+                "snapshot_id": snapshot_id,
+                "symbol_id": symbol_id,
+            },
         )
         return self._node_from_value(rows[0]["node"]) if rows else None
 
-    def get_containment(self, snapshot_id: str, node_id: str) -> list[GraphNode]:
+    def get_containment(
+        self, repository_id: str, snapshot_id: str, node_id: str
+    ) -> list[GraphNode]:
         return self._query_nodes(
             """
-            MATCH (source {id: $node_id})
+            MATCH (source {
+                id: $node_id,
+                repository_id: $repository_id,
+                snapshot_id: $snapshot_id
+            })
                   -[relationship:CONTAINS|DECLARES]->(node)
             WHERE relationship.snapshot_id = $snapshot_id
+              AND relationship.repository_id = $repository_id
               AND node.snapshot_id = $snapshot_id
+              AND node.repository_id = $repository_id
             RETURN DISTINCT node
             ORDER BY node.file_path, node.start_line, node.id
             """,
-            {"snapshot_id": snapshot_id, "node_id": node_id},
+            {"repository_id": repository_id, "snapshot_id": snapshot_id, "node_id": node_id},
         )
 
-    def get_callers(self, snapshot_id: str, symbol_id: str) -> list[GraphNode]:
+    def get_callers(self, repository_id: str, snapshot_id: str, symbol_id: str) -> list[GraphNode]:
         return self._query_nodes(
             """
-            MATCH (node:Symbol)-[relationship:CALLS]->
-                  (:Symbol {id: $symbol_id, snapshot_id: $snapshot_id})
+            MATCH (node:Symbol)-[relationship:CALLS]->(:Symbol {
+                id: $symbol_id,
+                repository_id: $repository_id,
+                snapshot_id: $snapshot_id
+            })
             WHERE relationship.snapshot_id = $snapshot_id
+              AND relationship.repository_id = $repository_id
               AND node.snapshot_id = $snapshot_id
+              AND node.repository_id = $repository_id
             RETURN DISTINCT node
             ORDER BY node.file_path, node.start_line, node.id
             """,
-            {"snapshot_id": snapshot_id, "symbol_id": symbol_id},
+            {
+                "repository_id": repository_id,
+                "snapshot_id": snapshot_id,
+                "symbol_id": symbol_id,
+            },
         )
 
-    def get_callees(self, snapshot_id: str, symbol_id: str) -> list[GraphNode]:
+    def get_callees(self, repository_id: str, snapshot_id: str, symbol_id: str) -> list[GraphNode]:
         return self._query_nodes(
             """
-            MATCH (:Symbol {id: $symbol_id, snapshot_id: $snapshot_id})
+            MATCH (:Symbol {
+                id: $symbol_id,
+                repository_id: $repository_id,
+                snapshot_id: $snapshot_id
+            })
                   -[relationship:CALLS]->(node:Symbol)
             WHERE relationship.snapshot_id = $snapshot_id
+              AND relationship.repository_id = $repository_id
               AND node.snapshot_id = $snapshot_id
+              AND node.repository_id = $repository_id
             RETURN DISTINCT node
             ORDER BY node.file_path, node.start_line, node.id
             """,
-            {"snapshot_id": snapshot_id, "symbol_id": symbol_id},
+            {
+                "repository_id": repository_id,
+                "snapshot_id": snapshot_id,
+                "symbol_id": symbol_id,
+            },
         )
 
-    def get_imports(self, snapshot_id: str, file_id: str) -> list[GraphNode]:
+    def get_imports(self, repository_id: str, snapshot_id: str, file_id: str) -> list[GraphNode]:
         return self._query_nodes(
             """
-            MATCH (:File {id: $file_id, snapshot_id: $snapshot_id})
+            MATCH (:File {
+                id: $file_id,
+                repository_id: $repository_id,
+                snapshot_id: $snapshot_id
+            })
                   -[relationship:IMPORTS]->(node:File)
             WHERE relationship.snapshot_id = $snapshot_id
+              AND relationship.repository_id = $repository_id
               AND node.snapshot_id = $snapshot_id
+              AND node.repository_id = $repository_id
             RETURN DISTINCT node
             ORDER BY node.file_path, node.id
             """,
-            {"snapshot_id": snapshot_id, "file_id": file_id},
+            {"repository_id": repository_id, "snapshot_id": snapshot_id, "file_id": file_id},
         )
 
-    def get_dependencies(self, snapshot_id: str, node_id: str) -> list[GraphNode]:
+    def get_dependencies(
+        self, repository_id: str, snapshot_id: str, node_id: str
+    ) -> list[GraphNode]:
         return self._query_nodes(
             """
-            MATCH (source {id: $node_id})
+            MATCH (source {
+                id: $node_id,
+                repository_id: $repository_id,
+                snapshot_id: $snapshot_id
+            })
                   -[relationship:IMPORTS|INHERITS|CALLS]->(node)
             WHERE relationship.snapshot_id = $snapshot_id
+              AND relationship.repository_id = $repository_id
               AND node.snapshot_id = $snapshot_id
+              AND node.repository_id = $repository_id
             RETURN DISTINCT node
             ORDER BY node.file_path, node.start_line, node.id
             """,
-            {"snapshot_id": snapshot_id, "node_id": node_id},
+            {"repository_id": repository_id, "snapshot_id": snapshot_id, "node_id": node_id},
         )
 
-    def get_neighbors(self, snapshot_id: str, symbol_id: str, max_depth: int) -> GraphNeighborhood:
+    def get_neighbors(
+        self,
+        repository_id: str,
+        snapshot_id: str,
+        symbol_id: str,
+        max_depth: int,
+    ) -> GraphNeighborhood:
         if max_depth < 1 or max_depth > 3:
             raise ValueError("max_depth must be between 1 and 3")
         rows = self._execute(
             f"""
-            MATCH path=(source:Symbol {{id: $symbol_id, snapshot_id: $snapshot_id}})
+            MATCH path=(source:Symbol {{
+                id: $symbol_id,
+                repository_id: $repository_id,
+                snapshot_id: $snapshot_id
+            }})
                   -[*1..{max_depth}]-(neighbor)
             WHERE neighbor.snapshot_id = $snapshot_id
+              AND neighbor.repository_id = $repository_id
               AND all(
                   relationship IN relationships(path)
                   WHERE relationship.snapshot_id = $snapshot_id
+                    AND relationship.repository_id = $repository_id
               )
             RETURN nodes(path) AS nodes, relationships(path) AS relationships
             ORDER BY length(path)
             """,
-            {"snapshot_id": snapshot_id, "symbol_id": symbol_id},
+            {
+                "repository_id": repository_id,
+                "snapshot_id": snapshot_id,
+                "symbol_id": symbol_id,
+            },
         )
         nodes: dict[str, GraphNode] = {}
         relationships: dict[str, GraphRelationship] = {}
@@ -232,6 +297,62 @@ class Neo4jGraphStore:
         return GraphNeighborhood(
             nodes=sorted(nodes.values(), key=lambda node: node.id),
             relationships=sorted(relationships.values(), key=lambda relationship: relationship.id),
+        )
+
+    def get_retrieval_context(
+        self,
+        repository_id: str,
+        snapshot_id: str,
+        symbol_ids: list[str],
+        max_neighbors_per_symbol: int,
+    ) -> GraphNeighborhood:
+        if max_neighbors_per_symbol < 1 or max_neighbors_per_symbol > 50:
+            raise ValueError("max_neighbors_per_symbol must be between 1 and 50")
+        unique_symbol_ids = list(dict.fromkeys(symbol_ids))[:50]
+        if not unique_symbol_ids:
+            return GraphNeighborhood()
+        rows = self._execute(
+            """
+            UNWIND $symbol_ids AS symbol_id
+            MATCH (seed:Symbol {
+                id: symbol_id,
+                repository_id: $repository_id,
+                snapshot_id: $snapshot_id
+            })
+            OPTIONAL MATCH (seed)-[relationship:CALLS|IMPORTS|INHERITS|DECLARES|CONTAINS]-(neighbor)
+            WHERE relationship.repository_id = $repository_id
+              AND relationship.snapshot_id = $snapshot_id
+              AND neighbor.repository_id = $repository_id
+              AND neighbor.snapshot_id = $snapshot_id
+            WITH seed, relationship, neighbor
+            ORDER BY type(relationship), neighbor.file_path, neighbor.start_line, neighbor.id
+            WITH seed,
+                 collect(relationship)[..$max_neighbors] AS relationships,
+                 collect(neighbor)[..$max_neighbors] AS neighbors
+            RETURN seed, relationships, neighbors
+            ORDER BY seed.id
+            """,
+            {
+                "repository_id": repository_id,
+                "snapshot_id": snapshot_id,
+                "symbol_ids": unique_symbol_ids,
+                "max_neighbors": max_neighbors_per_symbol,
+            },
+        )
+        nodes: dict[str, GraphNode] = {}
+        relationships: dict[str, GraphRelationship] = {}
+        for row in rows:
+            seed = self._node_from_value(row["seed"])
+            nodes[seed.id] = seed
+            for value in row["neighbors"]:
+                node = self._node_from_value(value)
+                nodes[node.id] = node
+            for value in row["relationships"]:
+                relationship = self._relationship_from_value(value)
+                relationships[relationship.id] = relationship
+        return GraphNeighborhood(
+            nodes=sorted(nodes.values(), key=lambda node: node.id),
+            relationships=sorted(relationships.values(), key=lambda item: item.id),
         )
 
     def close(self) -> None:
