@@ -1,105 +1,93 @@
 import { useEffect, useState } from 'react'
 
+import AppShell from './components/AppShell.jsx'
+import QueryWorkspace from './components/QueryWorkspace.jsx'
+import RepositoryWorkspace from './components/RepositoryWorkspace.jsx'
+import SystemStatus from './components/SystemStatus.jsx'
 import { getHealth, getReadiness } from './services/healthApi.js'
+import { analyzeSnapshot, askRepository, buildVectorIndex, persistGraph, registerRepository } from './services/repositoryApi.js'
 
-const loadingState = { kind: 'loading', label: 'Checking…' }
-
-function StatusCard({ title, state }) {
-  return (
-    <article className="status-card">
-      <div>
-        <p className="status-card__label">{title}</p>
-        <p className="status-card__detail">{state.detail}</p>
-      </div>
-      <span className={`status-badge status-badge--${state.kind}`}>
-        {state.label}
-      </span>
-    </article>
-  )
-}
+const initialStages = { ingestion: 'pending', analysis: 'pending', graph: 'pending', vector: 'pending', ready: 'pending' }
+const idleRequest = { loading: false, error: '' }
 
 function App() {
-  const [health, setHealth] = useState(loadingState)
-  const [readiness, setReadiness] = useState(loadingState)
+  const [activeView, setActiveView] = useState('repository')
+  const [repository, setRepository] = useState(null)
+  const [snapshot, setSnapshot] = useState(null)
+  const [stages, setStages] = useState(initialStages)
+  const [registrationState, setRegistrationState] = useState(idleRequest)
+  const [analysisState, setAnalysisState] = useState(idleRequest)
+  const [analysisSummary, setAnalysisSummary] = useState(null)
+  const [queryState, setQueryState] = useState({ ...idleRequest, result: null })
+  const [health, setHealth] = useState({ loading: true, data: null, error: '' })
+  const [readiness, setReadiness] = useState({ loading: true, data: null, error: '' })
 
   useEffect(() => {
     let active = true
-
-    getHealth()
-      .then((result) => {
-        if (active) {
-          setHealth({
-            kind: 'success',
-            label: 'Healthy',
-            detail: `${result.application} v${result.version}`,
-          })
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setHealth({
-            kind: 'error',
-            label: 'Unavailable',
-            detail: 'The backend health endpoint could not be reached.',
-          })
-        }
-      })
-
-    getReadiness()
-      .then((result) => {
-        if (active) {
-          setReadiness({
-            kind: result.status === 'ready' ? 'success' : 'warning',
-            label: result.status === 'ready' ? 'Ready' : 'Not ready',
-            detail:
-              result.status === 'ready'
-                ? 'MongoDB and Neo4j are reachable.'
-                : 'One or more data services are unavailable.',
-          })
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setReadiness({
-            kind: 'error',
-            label: 'Unavailable',
-            detail: 'The backend readiness endpoint could not be reached.',
-          })
-        }
-      })
-
-    return () => {
-      active = false
-    }
+    getHealth().then((data) => active && setHealth({ loading: false, data, error: '' })).catch((error) => active && setHealth({ loading: false, data: null, error: error.message }))
+    getReadiness().then((data) => active && setReadiness({ loading: false, data, error: '' })).catch((error) => active && setReadiness({ loading: false, data: null, error: error.message }))
+    return () => { active = false }
   }, [])
 
-  return (
-    <main className="page-shell">
-      <section className="hero">
-        <p className="eyebrow">Repository intelligence</p>
-        <h1>Understand code through structure and evidence.</h1>
-        <p className="hero__copy">
-          CodeGraph AI will combine repository knowledge graphs and semantic
-          retrieval to answer questions and review changes with source-backed
-          evidence.
-        </p>
-      </section>
+  async function handleRegister(githubUrl) {
+    setRegistrationState({ loading: true, error: '' })
+    try {
+      const result = await registerRepository(githubUrl)
+      setRepository(result.repository)
+      setSnapshot(result.snapshot)
+      setStages({ ...initialStages, ingestion: 'complete' })
+      setRegistrationState(idleRequest)
+    } catch (error) {
+      setRegistrationState({ loading: false, error: error.message })
+    }
+  }
 
-      <section className="status-panel" aria-labelledby="system-status-title">
-        <div className="status-panel__heading">
-          <div>
-            <p className="eyebrow">Foundation</p>
-            <h2 id="system-status-title">System status</h2>
-          </div>
-          <p>Live checks from the FastAPI backend.</p>
-        </div>
-        <div className="status-grid">
-          <StatusCard title="Backend" state={health} />
-          <StatusCard title="Dependencies" state={readiness} />
-        </div>
-      </section>
-    </main>
-  )
+  async function handleAnalyze() {
+    const repositoryId = repository.id
+    const snapshotId = snapshot.id
+    let activeStage = 'analysis'
+    setAnalysisState({ loading: true, error: '', failedStage: '' })
+    setAnalysisSummary(null)
+
+    try {
+      setStages((current) => ({ ...current, analysis: 'running' }))
+      const analysis = await analyzeSnapshot(repositoryId, snapshotId)
+      activeStage = 'graph'
+      setStages((current) => ({ ...current, analysis: 'complete', graph: 'running' }))
+
+      const graph = await persistGraph(repositoryId, snapshotId)
+      activeStage = 'vector'
+      setStages((current) => ({ ...current, graph: 'complete', vector: 'running' }))
+
+      const vector = await buildVectorIndex(repositoryId, snapshotId)
+      setStages({ ingestion: 'complete', analysis: 'complete', graph: 'complete', vector: 'complete', ready: 'complete' })
+      setAnalysisSummary({ symbols: analysis.symbols.length, nodes: graph.node_count, relationships: graph.relationship_count, chunks: vector.chunk_count })
+      setAnalysisState(idleRequest)
+    } catch (error) {
+      setStages((current) => ({ ...current, [activeStage]: 'failed' }))
+      const stageLabel = { analysis: 'Analysis', graph: 'Graph indexing', vector: 'Vector indexing' }[activeStage]
+      setAnalysisState({ loading: false, error: error.message, failedStage: stageLabel })
+    }
+  }
+
+  async function handleAsk(question) {
+    setQueryState({ loading: true, error: '', result: null })
+    try {
+      const result = await askRepository(repository.id, snapshot.id, question)
+      setQueryState({ loading: false, error: '', result })
+    } catch (error) {
+      setQueryState({ loading: false, error: error.message, result: null })
+    }
+  }
+
+  const indexReady = stages.ready === 'complete'
+  let content
+  if (activeView === 'repository') content = <RepositoryWorkspace repository={repository} snapshot={snapshot} stages={stages} registrationState={registrationState} analysisState={analysisState} analysisSummary={analysisSummary} onRegister={handleRegister} onAnalyze={handleAnalyze} />
+  if (activeView === 'intelligence') content = <QueryWorkspace repository={repository} snapshot={snapshot} indexReady={indexReady} queryState={queryState} onAsk={handleAsk} onNavigateRepository={() => setActiveView('repository')} />
+  if (activeView === 'system') content = <SystemStatus health={health} readiness={readiness} />
+
+  const connectionState = health.loading ? 'loading' : health.data ? 'available' : 'unavailable'
+  return <AppShell activeView={activeView} onNavigate={setActiveView} repository={repository} snapshot={snapshot} indexReady={indexReady} connectionState={connectionState}>{content}</AppShell>
 }
 
 export default App
