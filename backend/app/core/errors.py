@@ -64,3 +64,15 @@ class VectorIndexCorruptError(ApplicationError):
 
 class RetrievalIdentityMismatchError(ApplicationError):
     pass
+
+
+class ReasoningProviderError(ApplicationError):
+    pass
+
+
+class MalformedReasoningOutputError(ApplicationError):
+    pass
+
+
+class CitationValidationError(ApplicationError):
+    pass
