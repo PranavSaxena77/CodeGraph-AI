@@ -9,10 +9,13 @@ from app.api.v1.repositories import (
     get_analysis_service,
     get_graph_service,
     get_hybrid_retriever,
+    get_question_service,
     get_repository_service,
     get_vector_service,
 )
+from app.core.errors import MalformedReasoningOutputError
 from app.main import app
+from app.modules.ai.fake import DeterministicReasoningProvider
 from app.modules.analysis.chunking import SemanticChunker
 from app.modules.analysis.python_ast import PythonAstAnalyzer
 from app.modules.analysis.service import SnapshotAnalysisService
@@ -20,6 +23,7 @@ from app.modules.embeddings.fake import DeterministicEmbeddingProvider
 from app.modules.graph.service import GraphPersistenceService
 from app.modules.ingestion.archive import SafeZipExtractor
 from app.modules.ingestion.service import RepositoryIngestionService
+from app.modules.qa.service import RepositoryQuestionService
 from app.modules.retrieval.service import HybridRetriever
 from app.modules.vector.faiss_store import FaissVectorIndex
 from app.modules.vector.service import VectorRetrievalService
@@ -60,11 +64,17 @@ def api(tmp_path: Path) -> tuple[TestClient, InMemoryMetadataStore]:
         vector_index=FaissVectorIndex(tmp_path / "vectors"),
     )
     hybrid_retriever = HybridRetriever(vector_service, graph_store)
+    question_service = RepositoryQuestionService(
+        snapshot_reader=store,
+        hybrid_searcher=hybrid_retriever,
+        reasoning_provider=DeterministicReasoningProvider(),
+    )
     app.dependency_overrides[get_repository_service] = lambda: service
     app.dependency_overrides[get_analysis_service] = lambda: analysis_service
     app.dependency_overrides[get_graph_service] = lambda: graph_service
     app.dependency_overrides[get_vector_service] = lambda: vector_service
     app.dependency_overrides[get_hybrid_retriever] = lambda: hybrid_retriever
+    app.dependency_overrides[get_question_service] = lambda: question_service
     with TestClient(app) as client:
         yield client, store
     app.dependency_overrides.clear()
@@ -237,6 +247,76 @@ def test_api_hybrid_search_success_and_error_behavior(
     assert payload["metadata"]["returned_count"] == 1
     assert payload["evidence"][0]["file_path"] == "main.py"
     assert "exact_file_path" in payload["evidence"][0]["retrieval_reasons"]
+
+
+def test_api_repository_qa_returns_grounded_snapshot_evidence(
+    api: tuple[TestClient, InMemoryMetadataStore],
+) -> None:
+    client, _store = api
+    registration = client.post(
+        "/api/v1/repositories",
+        json={"github_url": "https://github.com/octocat/hello-python"},
+    ).json()
+    repository_id = registration["repository"]["id"]
+    snapshot_id = registration["snapshot"]["id"]
+    client.post(f"/api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/vector-index")
+
+    response = client.post(
+        f"/api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/ask",
+        json={"question": "What does the main function do?"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["outcome"] == "answered"
+    assert payload["snapshot_id"] == snapshot_id
+    assert payload["commit_sha"] == "a" * 40
+    assert payload["cited_evidence_ids"] == ["E1"]
+    assert payload["evidence"][0]["evidence_id"] == "E1"
+    assert payload["evidence"][0]["file_path"] == "main.py"
+    assert payload["evidence"][0]["symbol_name"] == "main"
+
+
+def test_api_repository_qa_validation_and_missing_index_errors(
+    api: tuple[TestClient, InMemoryMetadataStore],
+) -> None:
+    client, _store = api
+    registration = client.post(
+        "/api/v1/repositories",
+        json={"github_url": "https://github.com/octocat/hello-python"},
+    ).json()
+    repository_id = registration["repository"]["id"]
+    snapshot_id = registration["snapshot"]["id"]
+    path = f"/api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/ask"
+
+    blank = client.post(path, json={"question": "   "})
+    missing_index = client.post(path, json={"question": "What does main do?"})
+
+    assert blank.status_code == 422
+    assert missing_index.status_code == 404
+
+
+def test_api_repository_qa_maps_malformed_provider_output_to_bad_gateway(
+    api: tuple[TestClient, InMemoryMetadataStore],
+) -> None:
+    client, _store = api
+
+    class MalformedQuestionService:
+        def ask(self, *args: object) -> None:
+            raise MalformedReasoningOutputError("malformed structured output")
+
+    original_override = app.dependency_overrides[get_question_service]
+    app.dependency_overrides[get_question_service] = lambda: MalformedQuestionService()
+    try:
+        response = client.post(
+            "/api/v1/repositories/repository-1/snapshots/snapshot-1/ask",
+            json={"question": "How does it work?"},
+        )
+    finally:
+        app.dependency_overrides[get_question_service] = original_override
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "malformed structured output"
 
 
 def test_api_rejects_invalid_repository_url(api: tuple[TestClient, InMemoryMetadataStore]) -> None:

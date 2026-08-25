@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     gemini_embedding_dimension: int = Field(default=768, ge=1)
     gemini_api_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     gemini_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
+    gemini_reasoning_model: str = "gemini-2.5-flash"
+    gemini_max_output_tokens: int = Field(default=2_048, ge=1, le=65_536)
     embedding_batch_size: int = Field(default=32, ge=1, le=100)
     vector_index_root: Path = Path(".data/vector_indexes")
     max_chunk_chars: int = Field(default=8_000, ge=100)
@@ -47,6 +49,8 @@ class Settings(BaseSettings):
     hybrid_max_source_characters: int = Field(default=40_000, ge=1)
     hybrid_max_graph_seeds: int = Field(default=24, ge=1, le=50)
     hybrid_max_neighbors_per_symbol: int = Field(default=12, ge=1, le=50)
+    qa_retrieval_top_k: int = Field(default=8, ge=1, le=20)
+    qa_max_evidence_characters: int = Field(default=30_000, ge=1)
     max_archive_bytes: int = Field(default=25_000_000, ge=1)
     max_archive_members: int = Field(default=10_000, ge=1)
     max_extracted_bytes: int = Field(default=100_000_000, ge=1)

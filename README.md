@@ -142,8 +142,10 @@ All runtime configuration comes from environment variables. Backend settings als
 | `GITHUB_API_BASE_URL`, `GITHUB_TIMEOUT_SECONDS` | Public GitHub REST API configuration |
 | `MAX_ARCHIVE_*` | Repository archive safety limits |
 | `EMBEDDING_PROVIDER`, `EMBEDDING_FAKE_DIMENSION` | Embedding adapter selection and local deterministic dimension |
-| `GEMINI_API_KEY`, `GEMINI_EMBEDDING_*` | Optional Gemini embedding adapter credentials and model settings |
+| `GEMINI_API_KEY`, `GEMINI_EMBEDDING_*`, `GEMINI_REASONING_MODEL` | Optional Gemini embedding and grounded-reasoning configuration |
+| `GEMINI_MAX_OUTPUT_TOKENS` | Maximum structured Q&A response size |
 | `VECTOR_INDEX_ROOT`, `MAX_CHUNK_CHARS` | Snapshot index storage and deterministic chunk-size limit |
+| `HYBRID_*`, `QA_*` | Hybrid retrieval and Q&A evidence budgets |
 
 ## Current scope
 
@@ -155,11 +157,13 @@ Implemented now:
 - Deterministic Python AST analysis for files, classes, functions, methods, imports, inheritance, and conservative call references.
 - Idempotent Neo4j snapshot graphs with scoped symbol, containment, call, import, dependency, and neighbor queries.
 - Deterministic symbol-aware chunks, replaceable embedding providers, persistent exact FAISS indexes, and evidence-preserving semantic search.
+- Snapshot-safe hybrid graph/vector retrieval with deterministic fusion and context budgets.
+- Evidence-grounded repository Q&A with replaceable reasoning providers, validated citations, and optional Gemini generation.
 - Minimal React dashboard with an API service layer.
 - Database-only Docker Compose configuration with persistent volumes and health checks.
 - Backend and frontend tests that do not need external services.
 
 Explicitly deferred:
 
-- Gemini repository Q&A, LangChain, and LangGraph. A Gemini embedding adapter is available, but is optional and credential-dependent.
+- LangChain and LangGraph orchestration.
 - GitHub pull-request analysis and reviews.
