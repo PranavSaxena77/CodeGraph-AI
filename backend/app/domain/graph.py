@@ -42,6 +42,7 @@ class GraphRelationship(BaseModel):
     relationship_type: GraphRelationshipType
     source_id: str
     target_id: str
+    repository_id: str
     snapshot_id: str
     start_line: int | None = Field(default=None, ge=1)
     end_line: int | None = Field(default=None, ge=1)

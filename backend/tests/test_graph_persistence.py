@@ -150,25 +150,29 @@ def test_graph_query_operations_are_snapshot_scoped(tmp_path: Path) -> None:
     service_class = symbols["app.Service"]
     base = symbols["app.Base"]
 
-    assert service.get_symbol("snapshot-1", run.id) is not None
-    assert service.get_symbol("different-snapshot", run.id) is None
-    assert {node.id for node in service.get_containment("snapshot-1", service_class.id)} == {
+    assert service.get_symbol("repository-1", "snapshot-1", run.id) is not None
+    assert service.get_symbol("repository-1", "different-snapshot", run.id) is None
+    assert {
+        node.id for node in service.get_containment("repository-1", "snapshot-1", service_class.id)
+    } == {
         run.id,
         cleanup.id,
     }
-    assert [node.id for node in service.get_callers("snapshot-1", helper.id)] == [run.id]
-    assert {node.id for node in service.get_callees("snapshot-1", run.id)} == {
+    assert [node.id for node in service.get_callers("repository-1", "snapshot-1", helper.id)] == [
+        run.id
+    ]
+    assert {node.id for node in service.get_callees("repository-1", "snapshot-1", run.id)} == {
         helper.id,
         cleanup.id,
     }
-    assert [node.id for node in service.get_imports("snapshot-1", files["app.py"].id)] == [
-        files["utils.py"].id
-    ]
-    assert [node.id for node in service.get_dependencies("snapshot-1", service_class.id)] == [
-        base.id
-    ]
+    assert [
+        node.id for node in service.get_imports("repository-1", "snapshot-1", files["app.py"].id)
+    ] == [files["utils.py"].id]
+    assert [
+        node.id for node in service.get_dependencies("repository-1", "snapshot-1", service_class.id)
+    ] == [base.id]
 
-    neighborhood = service.get_neighbors("snapshot-1", run.id, 1)
+    neighborhood = service.get_neighbors("repository-1", "snapshot-1", run.id, 1)
     assert run.id in {node.id for node in neighborhood.nodes}
     assert helper.id in {node.id for node in neighborhood.nodes}
     assert all(

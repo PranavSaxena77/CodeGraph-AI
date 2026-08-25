@@ -65,6 +65,7 @@ class FakeGraphStore:
                 relationship_type="HAS_SNAPSHOT",
                 source_id=repository.id,
                 target_id=snapshot.id,
+                repository_id=repository.id,
                 snapshot_id=snapshot.id,
             )
         )
@@ -80,6 +81,7 @@ class FakeGraphStore:
                         relationship_type="CONTAINS",
                         source_id=snapshot.id,
                         target_id=symbol.id,
+                        repository_id=repository.id,
                         snapshot_id=snapshot.id,
                     )
                 )
@@ -94,6 +96,7 @@ class FakeGraphStore:
                     relationship_type="DECLARES",
                     source_id=source_id,
                     target_id=symbol.id,
+                    repository_id=repository.id,
                     snapshot_id=snapshot.id,
                 )
             )
@@ -106,6 +109,7 @@ class FakeGraphStore:
                         relationship_type="IMPORTS",
                         source_id=file_ids[record.file_path],
                         target_id=record.resolved_file_id,
+                        repository_id=repository.id,
                         snapshot_id=snapshot.id,
                         start_line=record.start_line,
                         end_line=record.end_line,
@@ -119,6 +123,7 @@ class FakeGraphStore:
                         relationship_type="INHERITS",
                         source_id=record.class_symbol_id,
                         target_id=record.resolved_symbol_id,
+                        repository_id=repository.id,
                         snapshot_id=snapshot.id,
                         start_line=record.start_line,
                         end_line=record.end_line,
@@ -136,6 +141,7 @@ class FakeGraphStore:
                         relationship_type="CALLS",
                         source_id=record.caller_symbol_id,
                         target_id=record.resolved_symbol_id,
+                        repository_id=repository.id,
                         snapshot_id=snapshot.id,
                         start_line=record.start_line,
                         end_line=record.end_line,
@@ -158,36 +164,56 @@ class FakeGraphStore:
         status = self.statuses.get((repository_id, snapshot_id))
         return status.model_copy(update={"idempotent": True}) if status else None
 
-    def get_symbol(self, snapshot_id: str, symbol_id: str) -> GraphNode | None:
+    def get_symbol(self, repository_id: str, snapshot_id: str, symbol_id: str) -> GraphNode | None:
         node = self.nodes.get((snapshot_id, symbol_id))
-        if node is None or node.node_type not in {"Class", "Function", "Method"}:
+        if (
+            node is None
+            or node.repository_id != repository_id
+            or node.node_type not in {"Class", "Function", "Method"}
+        ):
             return None
         return deepcopy(node)
 
-    def get_containment(self, snapshot_id: str, node_id: str) -> list[GraphNode]:
-        return self._targets(snapshot_id, node_id, {"CONTAINS", "DECLARES"})
+    def get_containment(
+        self, repository_id: str, snapshot_id: str, node_id: str
+    ) -> list[GraphNode]:
+        return self._targets(repository_id, snapshot_id, node_id, {"CONTAINS", "DECLARES"})
 
-    def get_callers(self, snapshot_id: str, symbol_id: str) -> list[GraphNode]:
+    def get_callers(self, repository_id: str, snapshot_id: str, symbol_id: str) -> list[GraphNode]:
         source_ids = {
             relationship.source_id
             for relationship in self._snapshot_relationships(snapshot_id)
-            if relationship.relationship_type == "CALLS" and relationship.target_id == symbol_id
+            if relationship.repository_id == repository_id
+            and relationship.relationship_type == "CALLS"
+            and relationship.target_id == symbol_id
         }
-        return self._nodes_by_ids(snapshot_id, source_ids)
+        return self._nodes_by_ids(repository_id, snapshot_id, source_ids)
 
-    def get_callees(self, snapshot_id: str, symbol_id: str) -> list[GraphNode]:
-        return self._targets(snapshot_id, symbol_id, {"CALLS"})
+    def get_callees(self, repository_id: str, snapshot_id: str, symbol_id: str) -> list[GraphNode]:
+        return self._targets(repository_id, snapshot_id, symbol_id, {"CALLS"})
 
-    def get_imports(self, snapshot_id: str, file_id: str) -> list[GraphNode]:
-        return self._targets(snapshot_id, file_id, {"IMPORTS"})
+    def get_imports(self, repository_id: str, snapshot_id: str, file_id: str) -> list[GraphNode]:
+        return self._targets(repository_id, snapshot_id, file_id, {"IMPORTS"})
 
-    def get_dependencies(self, snapshot_id: str, node_id: str) -> list[GraphNode]:
-        return self._targets(snapshot_id, node_id, {"IMPORTS", "INHERITS", "CALLS"})
+    def get_dependencies(
+        self, repository_id: str, snapshot_id: str, node_id: str
+    ) -> list[GraphNode]:
+        return self._targets(repository_id, snapshot_id, node_id, {"IMPORTS", "INHERITS", "CALLS"})
 
-    def get_neighbors(self, snapshot_id: str, symbol_id: str, max_depth: int) -> GraphNeighborhood:
+    def get_neighbors(
+        self,
+        repository_id: str,
+        snapshot_id: str,
+        symbol_id: str,
+        max_depth: int,
+    ) -> GraphNeighborhood:
         if max_depth < 1 or max_depth > 3:
             raise ValueError("max_depth must be between 1 and 3")
-        relationships = self._snapshot_relationships(snapshot_id)
+        relationships = [
+            item
+            for item in self._snapshot_relationships(snapshot_id)
+            if item.repository_id == repository_id
+        ]
         visited = {symbol_id}
         frontier = {symbol_id}
         selected_relationships: dict[str, GraphRelationship] = {}
@@ -202,7 +228,40 @@ class FakeGraphStore:
             if not frontier:
                 break
         return GraphNeighborhood(
-            nodes=self._nodes_by_ids(snapshot_id, visited),
+            nodes=self._nodes_by_ids(repository_id, snapshot_id, visited),
+            relationships=sorted(
+                (deepcopy(item) for item in selected_relationships.values()),
+                key=lambda item: item.id,
+            ),
+        )
+
+    def get_retrieval_context(
+        self,
+        repository_id: str,
+        snapshot_id: str,
+        symbol_ids: list[str],
+        max_neighbors_per_symbol: int,
+    ) -> GraphNeighborhood:
+        if max_neighbors_per_symbol < 1 or max_neighbors_per_symbol > 50:
+            raise ValueError("max_neighbors_per_symbol must be between 1 and 50")
+        selected_ids = set(symbol_ids[:50])
+        selected_relationships: dict[str, GraphRelationship] = {}
+        for symbol_id in symbol_ids[:50]:
+            connected = [
+                item
+                for item in self._snapshot_relationships(snapshot_id)
+                if item.repository_id == repository_id
+                and item.relationship_type
+                in {"CALLS", "IMPORTS", "INHERITS", "DECLARES", "CONTAINS"}
+                and symbol_id in {item.source_id, item.target_id}
+            ]
+            for relationship in sorted(connected, key=lambda item: item.id)[
+                :max_neighbors_per_symbol
+            ]:
+                selected_relationships[relationship.id] = relationship
+                selected_ids.update({relationship.source_id, relationship.target_id})
+        return GraphNeighborhood(
+            nodes=self._nodes_by_ids(repository_id, snapshot_id, selected_ids),
             relationships=sorted(
                 (deepcopy(item) for item in selected_relationships.values()),
                 key=lambda item: item.id,
@@ -252,6 +311,7 @@ class FakeGraphStore:
 
     def _targets(
         self,
+        repository_id: str,
         snapshot_id: str,
         source_id: str,
         relationship_types: set[GraphRelationshipType],
@@ -259,17 +319,22 @@ class FakeGraphStore:
         target_ids = {
             relationship.target_id
             for relationship in self._snapshot_relationships(snapshot_id)
-            if relationship.source_id == source_id
+            if relationship.repository_id == repository_id
+            and relationship.source_id == source_id
             and relationship.relationship_type in relationship_types
         }
-        return self._nodes_by_ids(snapshot_id, target_ids)
+        return self._nodes_by_ids(repository_id, snapshot_id, target_ids)
 
-    def _nodes_by_ids(self, snapshot_id: str, node_ids: set[str]) -> list[GraphNode]:
+    def _nodes_by_ids(
+        self, repository_id: str, snapshot_id: str, node_ids: set[str]
+    ) -> list[GraphNode]:
         return sorted(
             (
                 deepcopy(node)
                 for (scope, node_id), node in self.nodes.items()
-                if scope == snapshot_id and node_id in node_ids
+                if scope == snapshot_id
+                and node.repository_id == repository_id
+                and node_id in node_ids
             ),
             key=lambda node: node.id,
         )

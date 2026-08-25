@@ -44,26 +44,46 @@ class GraphPersistenceService:
             raise GraphSnapshotNotFoundError("Snapshot graph was not found")
         return graph_status
 
-    def get_symbol(self, snapshot_id: str, symbol_id: str) -> GraphNode | None:
-        return self._graph_store.get_symbol(snapshot_id, symbol_id)
+    def get_symbol(self, repository_id: str, snapshot_id: str, symbol_id: str) -> GraphNode | None:
+        return self._graph_store.get_symbol(repository_id, snapshot_id, symbol_id)
 
-    def get_containment(self, snapshot_id: str, node_id: str) -> list[GraphNode]:
-        return self._graph_store.get_containment(snapshot_id, node_id)
+    def get_containment(
+        self, repository_id: str, snapshot_id: str, node_id: str
+    ) -> list[GraphNode]:
+        return self._graph_store.get_containment(repository_id, snapshot_id, node_id)
 
-    def get_callers(self, snapshot_id: str, symbol_id: str) -> list[GraphNode]:
-        return self._graph_store.get_callers(snapshot_id, symbol_id)
+    def get_callers(self, repository_id: str, snapshot_id: str, symbol_id: str) -> list[GraphNode]:
+        return self._graph_store.get_callers(repository_id, snapshot_id, symbol_id)
 
-    def get_callees(self, snapshot_id: str, symbol_id: str) -> list[GraphNode]:
-        return self._graph_store.get_callees(snapshot_id, symbol_id)
+    def get_callees(self, repository_id: str, snapshot_id: str, symbol_id: str) -> list[GraphNode]:
+        return self._graph_store.get_callees(repository_id, snapshot_id, symbol_id)
 
-    def get_imports(self, snapshot_id: str, file_id: str) -> list[GraphNode]:
-        return self._graph_store.get_imports(snapshot_id, file_id)
+    def get_imports(self, repository_id: str, snapshot_id: str, file_id: str) -> list[GraphNode]:
+        return self._graph_store.get_imports(repository_id, snapshot_id, file_id)
 
-    def get_dependencies(self, snapshot_id: str, node_id: str) -> list[GraphNode]:
-        return self._graph_store.get_dependencies(snapshot_id, node_id)
+    def get_dependencies(
+        self, repository_id: str, snapshot_id: str, node_id: str
+    ) -> list[GraphNode]:
+        return self._graph_store.get_dependencies(repository_id, snapshot_id, node_id)
 
-    def get_neighbors(self, snapshot_id: str, symbol_id: str, max_depth: int) -> GraphNeighborhood:
-        return self._graph_store.get_neighbors(snapshot_id, symbol_id, max_depth)
+    def get_neighbors(
+        self, repository_id: str, snapshot_id: str, symbol_id: str, max_depth: int
+    ) -> GraphNeighborhood:
+        return self._graph_store.get_neighbors(repository_id, snapshot_id, symbol_id, max_depth)
+
+    def get_retrieval_context(
+        self,
+        repository_id: str,
+        snapshot_id: str,
+        symbol_ids: list[str],
+        max_neighbors_per_symbol: int,
+    ) -> GraphNeighborhood:
+        return self._graph_store.get_retrieval_context(
+            repository_id,
+            snapshot_id,
+            symbol_ids,
+            max_neighbors_per_symbol,
+        )
 
     def _get_snapshot(
         self, repository_id: str, snapshot_id: str

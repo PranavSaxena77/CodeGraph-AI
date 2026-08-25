@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.api.v1.repositories import (
     get_analysis_service,
     get_graph_service,
+    get_hybrid_retriever,
     get_repository_service,
     get_vector_service,
 )
@@ -19,6 +20,7 @@ from app.modules.embeddings.fake import DeterministicEmbeddingProvider
 from app.modules.graph.service import GraphPersistenceService
 from app.modules.ingestion.archive import SafeZipExtractor
 from app.modules.ingestion.service import RepositoryIngestionService
+from app.modules.retrieval.service import HybridRetriever
 from app.modules.vector.faiss_store import FaissVectorIndex
 from app.modules.vector.service import VectorRetrievalService
 from tests.fake_graph import FakeGraphStore
@@ -48,7 +50,8 @@ def api(tmp_path: Path) -> tuple[TestClient, InMemoryMetadataStore]:
         extractor=extractor,
         analyzer=PythonAstAnalyzer(),
     )
-    graph_service = GraphPersistenceService(store, analysis_service, FakeGraphStore())
+    graph_store = FakeGraphStore()
+    graph_service = GraphPersistenceService(store, analysis_service, graph_store)
     vector_service = VectorRetrievalService(
         metadata_store=store,
         analyzer=analysis_service,
@@ -56,10 +59,12 @@ def api(tmp_path: Path) -> tuple[TestClient, InMemoryMetadataStore]:
         embedding_provider=DeterministicEmbeddingProvider(32),
         vector_index=FaissVectorIndex(tmp_path / "vectors"),
     )
+    hybrid_retriever = HybridRetriever(vector_service, graph_store)
     app.dependency_overrides[get_repository_service] = lambda: service
     app.dependency_overrides[get_analysis_service] = lambda: analysis_service
     app.dependency_overrides[get_graph_service] = lambda: graph_service
     app.dependency_overrides[get_vector_service] = lambda: vector_service
+    app.dependency_overrides[get_hybrid_retriever] = lambda: hybrid_retriever
     with TestClient(app) as client:
         yield client, store
     app.dependency_overrides.clear()
@@ -203,6 +208,35 @@ def test_api_rejects_search_before_index_and_invalid_top_k(
 
     assert missing.status_code == 404
     assert invalid.status_code == 422
+
+
+def test_api_hybrid_search_success_and_error_behavior(
+    api: tuple[TestClient, InMemoryMetadataStore],
+) -> None:
+    client, _store = api
+    registration = client.post(
+        "/api/v1/repositories",
+        json={"github_url": "https://github.com/octocat/hello-python"},
+    ).json()
+    repository_id = registration["repository"]["id"]
+    snapshot_id = registration["snapshot"]["id"]
+    path = f"/api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/hybrid-search"
+
+    missing = client.post(path, json={"query": "main function", "top_k": 1})
+    invalid = client.post(path, json={"query": "main function", "top_k": 0})
+    client.post(f"/api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/vector-index")
+    success = client.post(path, json={"query": "main.py main", "top_k": 1})
+
+    assert missing.status_code == 404
+    assert invalid.status_code == 422
+    assert success.status_code == 200
+    payload = success.json()
+    assert payload["repository_id"] == repository_id
+    assert payload["snapshot_id"] == snapshot_id
+    assert payload["metadata"]["outcome"] == "sufficient"
+    assert payload["metadata"]["returned_count"] == 1
+    assert payload["evidence"][0]["file_path"] == "main.py"
+    assert "exact_file_path" in payload["evidence"][0]["retrieval_reasons"]
 
 
 def test_api_rejects_invalid_repository_url(api: tuple[TestClient, InMemoryMetadataStore]) -> None:
