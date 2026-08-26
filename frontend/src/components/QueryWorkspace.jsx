@@ -1,16 +1,24 @@
 import { useState } from 'react'
 
+import { SESSION_INTELLIGENCE_PLACEHOLDER } from './intelligenceQuestions.js'
+import { ProcessingActivity } from './ProcessingActivity.jsx'
+import { ErrorPanel } from './Ui.jsx'
+
 function SourceSnippet({ content, startLine }) {
   const lines = content.split('\n')
+  const [copied, setCopied] = useState(false)
   async function copySource() {
-    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(content)
+    if (!navigator.clipboard?.writeText) return
+    await navigator.clipboard.writeText(content)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1600)
   }
 
   return (
     <div className="source">
       <div className="source__toolbar">
         <span>Source excerpt</span>
-        <button type="button" onClick={copySource} aria-label="Copy source excerpt">Copy source</button>
+        <button type="button" onClick={copySource} aria-label={copied ? 'Source excerpt copied' : 'Copy source excerpt'} aria-live="polite">{copied ? 'Copied' : 'Copy source'}</button>
       </div>
       <pre><code>{lines.map((line, index) => (
         <span className="source__line" key={`${startLine + index}-${line}`}>
@@ -46,11 +54,20 @@ function EvidenceSelector({ evidence, selectedId, onSelect }) {
 }
 
 function EvidenceDetail({ evidence }) {
+  const [pathCopied, setPathCopied] = useState(false)
   if (!evidence) return null
+
+  async function copyPath() {
+    if (!navigator.clipboard?.writeText) return
+    await navigator.clipboard.writeText(evidence.file_path)
+    setPathCopied(true)
+    window.setTimeout(() => setPathCopied(false), 1600)
+  }
+
   return (
     <article className="evidence-detail">
       <header className="evidence-detail__header">
-        <div className="evidence-field evidence-field--file"><span>File</span><code>{evidence.file_path}</code></div>
+        <div className="evidence-field evidence-field--file"><span>File</span><div><code>{evidence.file_path}</code><button type="button" onClick={copyPath} aria-label={pathCopied ? 'File path copied' : 'Copy file path'} aria-live="polite">{pathCopied ? 'Copied' : 'Copy path'}</button></div></div>
         <div className="evidence-field"><span>Type</span><strong>{evidence.symbol_type}</strong></div>
         <div className="evidence-field"><span>Lines</span><code>{evidence.start_line}–{evidence.end_line}</code></div>
       </header>
@@ -62,9 +79,14 @@ function EvidenceDetail({ evidence }) {
 
 function LoadingWorkspace() {
   return (
-    <div className="query-loading" aria-label="Retrieving repository evidence" role="status">
-      <div className="query-loading__answer"><span /><span /><span /></div>
-      <div className="query-loading__evidence"><span /><span /><span /><span /></div>
+    <div className="query-loading" aria-label="Retrieving repository evidence">
+      <div className="query-loading__answer">
+        <ProcessingActivity stage="query" />
+      </div>
+      <div className="query-loading__evidence">
+        <div className="loading-panel__header"><span><strong>Evidence explorer</strong><small>Candidate sources will remain inspectable</small></span></div>
+        <div className="evidence-skeleton" aria-hidden="true"><span /><span /><span /></div>
+      </div>
     </div>
   )
 }
@@ -73,13 +95,22 @@ export default function QueryWorkspace({ repository, snapshot, indexReady, query
   const [question, setQuestion] = useState('')
   const [selectedEvidenceId, setSelectedEvidenceId] = useState(null)
 
+  function submitQuestion() {
+    const value = question.trim()
+    if (!value || queryState.loading) return
+    setSelectedEvidenceId(null)
+    onAsk(value)
+  }
+
   function submit(event) {
     event.preventDefault()
-    const value = question.trim()
-    if (value) {
-      setSelectedEvidenceId(null)
-      onAsk(value)
-    }
+    submitQuestion()
+  }
+
+  function handleQuestionKeyDown(event) {
+    if (event.key !== 'Enter' || event.shiftKey) return
+    event.preventDefault()
+    submitQuestion()
   }
 
   if (!repository || !indexReady) {
@@ -100,13 +131,13 @@ export default function QueryWorkspace({ repository, snapshot, indexReady, query
       <form className="query-form" onSubmit={submit}>
         <label htmlFor="repository-question">Query repository</label>
         <div className="query-form__input">
-          <textarea id="repository-question" value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Where is authentication handled and which components depend on it?" maxLength={2000} disabled={queryState.loading} />
+          <textarea id="repository-question" value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={handleQuestionKeyDown} placeholder={SESSION_INTELLIGENCE_PLACEHOLDER} maxLength={2000} disabled={queryState.loading} />
           <div className="query-form__footer"><span>{question.length} / 2000 · Evidence-scoped response</span><button className="button button--primary" type="submit" disabled={!question.trim() || queryState.loading}>{queryState.loading ? 'Retrieving…' : 'Run query'}</button></div>
         </div>
       </form>
 
       {queryState.loading && <LoadingWorkspace />}
-      {queryState.error && <div className="notice notice--error notice--standalone" role="alert"><strong>Query failed</strong><span>{queryState.error}</span></div>}
+      {queryState.error && <ErrorPanel title="Repository query failed" message={queryState.error} actionLabel="Retry query" onAction={() => onAsk(question.trim())} />}
       {queryState.result?.outcome === 'insufficient_evidence' && <div className="notice notice--neutral notice--standalone" role="status"><strong>Insufficient evidence</strong><span>Insufficient repository evidence was retrieved for this query.</span></div>}
       {queryState.result?.outcome === 'answered' && (
         <div className="intelligence-results">
