@@ -1,32 +1,43 @@
+import { ErrorPanel, Spinner, StatusIndicator } from './Ui.jsx'
+
 function ServiceRow({ name, description, state }) {
-  const label = state === 'available' ? 'Available' : state === 'loading' ? 'Checking' : 'Unavailable'
+  const label = state === 'available' ? 'AVAILABLE' : state === 'degraded' ? 'DEGRADED' : state === 'loading' ? 'CHECKING' : 'UNAVAILABLE'
   return (
     <div className="service-row" data-state={state}>
-      <span className={`signal signal--${state}`} aria-hidden="true" />
+      <span className={`signal signal--${state} ${state === 'loading' ? 'signal--pulse' : ''}`} aria-hidden="true" />
       <div><strong>{name}</strong><p>{description}</p></div>
-      <code className="service-row__state">{state === 'available' ? 'CONNECTION_OK' : state === 'loading' ? 'CHECK_PENDING' : 'CONNECTION_FAILED'}</code>
+      <code className="service-row__state">{state === 'available' ? 'CONNECTION_OK' : state === 'degraded' ? 'PARTIAL_AVAILABILITY' : state === 'loading' ? 'CHECK_PENDING' : 'CONNECTION_FAILED'}</code>
       <span className={`status-badge status-badge--${state === 'available' ? 'complete' : state}`}>{label}</span>
     </div>
   )
 }
 
-export default function SystemStatus({ health, readiness }) {
+export default function SystemStatus({ health, readiness, lastRefresh, onRefresh }) {
   const dependencyState = (name) => {
     if (readiness.loading) return 'loading'
-    return readiness.data?.dependencies?.[name]?.status === 'ready' ? 'available' : 'unavailable'
+    const status = readiness.data?.dependencies?.[name]?.status
+    if (status === 'ready') return 'available'
+    if (status && status !== 'unavailable') return 'degraded'
+    return 'unavailable'
   }
   const backendState = health.loading ? 'loading' : health.data ? 'available' : 'unavailable'
+  const refreshing = health.loading || readiness.loading
+  const overallState = refreshing ? 'loading' : backendState === 'available' && dependencyState('mongodb') === 'available' && dependencyState('neo4j') === 'available' ? 'available' : backendState === 'unavailable' ? 'unavailable' : 'degraded'
+  const overallLabel = { loading: 'Refreshing service state', available: 'All systems operational', degraded: 'Partial service degradation', unavailable: 'Backend unavailable' }[overallState]
+  const refreshedLabel = lastRefresh ? lastRefresh.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Not yet checked'
 
   return (
     <section className="view" aria-labelledby="system-title">
       <div className="view-heading"><div><p className="eyebrow">Operations</p><h1 id="system-title">System status</h1></div><p>Live readiness checks for required application services.</p></div>
       <div className="panel system-panel">
-        <div className="panel__heading"><div><span className="panel__kicker">INFRASTRUCTURE</span><h2>Service availability</h2><p>Readiness is reported directly by the FastAPI backend.</p></div><span className="last-check">LIVE CHECK · CURRENT SESSION</span></div>
+        <div className="panel__heading panel__heading--action"><div><span className="panel__kicker">INFRASTRUCTURE</span><h2>Service availability</h2><p>Readiness is reported directly by the FastAPI backend.</p></div><button className="button button--secondary" type="button" onClick={onRefresh} disabled={refreshing}>{refreshing && <Spinner />}<span>{refreshing ? 'Refreshing' : 'Refresh status'}</span></button></div>
+        <div className="system-summary"><StatusIndicator state={overallState} label={overallLabel} pulse={refreshing} /><span>Last refreshed <code>{refreshedLabel}</code></span></div>
         <div className="service-list">
           <ServiceRow name="Backend" description={health.data ? `${health.data.application} v${health.data.version}` : health.error ?? 'Checking API liveness.'} state={backendState} />
           <ServiceRow name="MongoDB" description="Repository and snapshot metadata" state={dependencyState('mongodb')} />
           <ServiceRow name="Neo4j" description="Structural code graph" state={dependencyState('neo4j')} />
         </div>
+        {(health.error || readiness.error) && <ErrorPanel compact title="Status refresh incomplete" message={health.error || readiness.error} actionLabel="Retry refresh" onAction={onRefresh} />}
       </div>
     </section>
   )
