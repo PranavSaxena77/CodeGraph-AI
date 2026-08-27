@@ -3,6 +3,10 @@ const API_BASE_URL =
 
 const DEFAULT_ERROR_MESSAGE = 'The request could not be completed.'
 
+export function getApiBaseUrl() {
+  return API_BASE_URL
+}
+
 export class ApiError extends Error {
   constructor(message, status) {
     super(message)

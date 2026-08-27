@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { Spinner } from './Ui.jsx'
-import { PIPELINE_ACTIVITY_STAGES, PROCESSING_ACTIVITY } from './processingActivity.js'
+import { PROCESSING_ACTIVITY } from './processingActivity.js'
 
 const ACTIVITY_STEP_MS = 650
 
@@ -60,62 +60,36 @@ export function ProcessingActivity({ stage, state = 'running', compact = false }
   )
 }
 
-export function RepositoryActivity({ stages }) {
-  const currentStage = PIPELINE_ACTIVITY_STAGES.find((stage) => stages[stage] === 'running' || stages[stage] === 'failed')
-  const visibleStages = PIPELINE_ACTIVITY_STAGES.filter((stage) => stages[stage] === 'complete' || stage === currentStage)
-  const activeActivity = currentStage ? PROCESSING_ACTIVITY[currentStage] : null
-  const [elapsed, setElapsed] = useState(0)
-  const [activeIndex, setActiveIndex] = useState(0)
-  const activeEntryRef = useRef(null)
+export function RepositoryActivity({ operation, stages, compact = false }) {
+  const entriesRef = useRef(null)
+  const followLatestRef = useRef(true)
+  const events = operation.data?.events ?? []
+  const currentStage = ['ingestion', 'analysis', 'graph', 'vector'].find((stage) => stages[stage] === 'running' || stages[stage] === 'failed')
+  const isRunning = Boolean(currentStage && stages[currentStage] === 'running')
 
   useEffect(() => {
-    if (!currentStage || stages[currentStage] !== 'running') return undefined
-    const startedAt = performance.now()
-    setElapsed(0)
-    setActiveIndex(0)
-    const interval = window.setInterval(() => {
-      const nextElapsed = performance.now() - startedAt
-      setElapsed(nextElapsed)
-      setActiveIndex(Math.min(Math.floor(nextElapsed / ACTIVITY_STEP_MS), activeActivity.entries.length - 1))
-    }, 250)
-    return () => window.clearInterval(interval)
-  }, [activeActivity, currentStage, stages])
+    if (!followLatestRef.current || !entriesRef.current) return
+    entriesRef.current.scrollTop = entriesRef.current.scrollHeight
+  }, [events.length])
 
-  useEffect(() => { activeEntryRef.current?.scrollIntoView?.({ block: 'nearest' }) }, [activeIndex])
+  function handleScroll(event) {
+    const element = event.currentTarget
+    followLatestRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 32
+  }
 
-  const stageLabel = currentStage ? PROCESSING_ACTIVITY[currentStage].label : stages.vector === 'complete' ? 'Pipeline complete' : 'Repository ingestion'
   return (
-    <section className="repository-activity" aria-label="Processing Activity" aria-live={currentStage ? 'polite' : undefined} role={currentStage ? 'status' : undefined}>
-      <header><div><span className="panel__kicker">CLIENT OPERATION SEQUENCE</span><h2>Processing Activity</h2></div><span className={`live-indicator ${currentStage ? 'live-indicator--active' : ''}`}><i />{currentStage ? 'Live' : 'Idle'}</span></header>
-      <ol className="repository-activity__entries">
-        {visibleStages.flatMap((stage) => PROCESSING_ACTIVITY[stage].entries.map((entry, index) => {
-          const stageState = stages[stage]
-          const entryState = stageState === 'complete' || (stageState === 'running' && index < activeIndex) ? 'complete' : stageState === 'failed' && index === activeIndex ? 'failed' : stageState === 'running' && index === activeIndex ? 'active' : 'pending'
-          const marker = entryState === 'complete' ? 'DONE' : entryState === 'active' ? formatElapsed(elapsed) : entryState === 'failed' ? 'FAIL' : '—'
-          return <li className={`repository-activity__entry repository-activity__entry--${entryState}`} key={`${stage}-${entry}`} ref={entryState === 'active' ? activeEntryRef : undefined}><code>{marker}</code><span /><strong>{entry}</strong></li>
-        }))}
-        {visibleStages.length === 0 && <li className="repository-activity__empty">Run the pipeline to begin structural and semantic processing.</li>}
+    <section className={`repository-activity ${compact ? 'repository-activity--compact' : ''}`} aria-label="Live Backend Activity" aria-live={isRunning ? 'polite' : undefined} role={isRunning ? 'status' : undefined}>
+      <header><div><span className="panel__kicker">Backend operation events</span><h2>Live Backend Activity</h2></div><span className={`live-indicator ${isRunning ? 'live-indicator--active' : ''}`}><i />{isRunning ? 'Live' : operation.data?.status === 'complete' ? 'Complete' : operation.data?.status === 'failed' ? 'Failed' : 'Idle'}</span></header>
+      <ol className="repository-activity__entries" onScroll={handleScroll} ref={entriesRef}>
+        {events.map((event) => <li className={`repository-activity__entry repository-activity__entry--${event.status}`} key={event.id}><time dateTime={event.completed_at ?? event.started_at}>{formatBackendTime(event.completed_at ?? event.started_at)}</time><i className="activity-status-dot" aria-hidden="true" /><code className="activity-status">{event.status.toUpperCase()}</code><strong>{event.message}</strong>{event.metric && <span className="repository-activity__metric"><b>{event.metric.value.toLocaleString()}</b>{event.metric.label}</span>}</li>)}
+        {events.length === 0 && <li className="repository-activity__empty">{isRunning ? <><Spinner /> Waiting for the backend to report the first operation…</> : 'Run the pipeline to begin structural and semantic processing.'}</li>}
       </ol>
-      <footer><span>Stage: <strong>{stageLabel}</strong></span><span>Elapsed: <code>{currentStage ? formatElapsed(elapsed) : '—'}</code></span><small>Processing Activity is client-side and not backend logs.</small></footer>
+      <footer><span>Source: <strong>FastAPI operation registry</strong></span><span>Events: <code>{events.length}</code></span>{operation.error && <small>{operation.error}</small>}</footer>
     </section>
   )
 }
 
-export function PipelineActivity({ stages }) {
-  const completedStages = PIPELINE_ACTIVITY_STAGES.filter((stage) => stages[stage] === 'complete')
-  const currentStage = PIPELINE_ACTIVITY_STAGES.find((stage) => stages[stage] === 'running' || stages[stage] === 'failed')
-
-  if (completedStages.length === 0 && !currentStage) return null
-
-  return (
-    <div className="pipeline-activity">
-      {completedStages.map((stage) => (
-        <details className="activity-history" key={stage}>
-          <summary><span>{PROCESSING_ACTIVITY[stage].label}</span><code>{PROCESSING_ACTIVITY[stage].entries.length} ACTIVITIES COMPLETE</code></summary>
-          <ProcessingActivity stage={stage} state="complete" compact />
-        </details>
-      ))}
-      {currentStage && <ProcessingActivity stage={currentStage} state={stages[currentStage]} />}
-    </div>
-  )
+function formatBackendTime(value) {
+  if (!value) return '—'
+  return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }

@@ -12,6 +12,12 @@ const iconPaths = {
   graph: <><circle cx="6" cy="6" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="12" cy="18" r="2" /><path d="m8 7 3 9m5-9-3 9M8 6h8" /></>,
   layers: <><path d="m12 3 9 5-9 5-9-5z" /><path d="m3 12 9 5 9-5M3 16l9 5 9-5" /></>,
   code: <><path d="m8 9-4 3 4 3m8-6 4 3-4 3M14 5l-4 14" /></>,
+  check: <path d="m5 12 4 4L19 6" />,
+  clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
+  branch: <><circle cx="6" cy="5" r="2" /><circle cx="18" cy="7" r="2" /><circle cx="6" cy="19" r="2" /><path d="M6 7v10M8 7h4a6 6 0 0 1 6 6v-4" /></>,
+  activity: <path d="M3 12h4l2.5-6 5 12 2.5-6h4" />,
+  expand: <><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" /><path d="m3 8 6-6m12 6-6-6M3 16l6 6m12-6-6 6" /></>,
+  close: <path d="m5 5 14 14M19 5 5 19" />,
 }
 
 export function Icon({ name, size = 16 }) {
