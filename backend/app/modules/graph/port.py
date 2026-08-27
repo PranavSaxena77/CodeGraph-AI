@@ -7,6 +7,7 @@ from app.domain.graph import (
     GraphPersistenceStatus,
 )
 from app.domain.repositories import RepositoryMetadata, SnapshotMetadata
+from app.modules.operations.port import OperationReporter
 
 
 class GraphStore(Protocol):
@@ -15,6 +16,7 @@ class GraphStore(Protocol):
         repository: RepositoryMetadata,
         snapshot: SnapshotMetadata,
         analysis: SnapshotAnalysis,
+        reporter: OperationReporter | None = None,
     ) -> GraphPersistenceStatus: ...
 
     def get_persistence_status(
@@ -55,4 +57,8 @@ class GraphStore(Protocol):
         snapshot_id: str,
         symbol_ids: list[str],
         max_neighbors_per_symbol: int,
+    ) -> GraphNeighborhood: ...
+
+    def get_preview(
+        self, repository_id: str, snapshot_id: str, max_nodes: int
     ) -> GraphNeighborhood: ...

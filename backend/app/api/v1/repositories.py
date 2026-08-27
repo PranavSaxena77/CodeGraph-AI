@@ -1,8 +1,10 @@
 from functools import lru_cache
 from typing import Annotated
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 
+from app.api.v1.operations import OperationStore
 from app.core.config import get_settings
 from app.core.errors import (
     ArchiveLimitError,
@@ -26,7 +28,7 @@ from app.core.errors import (
     VectorStoreError,
 )
 from app.domain.analysis import SnapshotAnalysis
-from app.domain.graph import GraphPersistenceStatus
+from app.domain.graph import GraphNeighborhood, GraphPersistenceStatus
 from app.domain.qa import RepositoryAnswerResponse, RepositoryQuestionRequest
 from app.domain.repositories import (
     RepositoryMetadata,
@@ -51,12 +53,32 @@ from app.modules.graph.service import GraphPersistenceService
 from app.modules.ingestion.archive import SafeZipExtractor
 from app.modules.ingestion.service import RepositoryIngestionService
 from app.modules.ingestion.store import MongoMetadataStore
+from app.modules.operations.port import OperationReporter
 from app.modules.qa.service import RepositoryQuestionService
 from app.modules.retrieval.service import HybridRetriever
 from app.modules.vector.faiss_store import FaissVectorIndex
 from app.modules.vector.service import VectorRetrievalService
 
 router = APIRouter(prefix="/repositories", tags=["repositories"])
+OperationHeader = Annotated[
+    str | None,
+    Header(
+        alias="X-CodeGraph-Operation-ID",
+        min_length=1,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    ),
+]
+
+
+def _operation_reporter(
+    operation_id: str | None,
+    response: Response,
+    store: OperationStore,
+) -> OperationReporter:
+    resolved_id = operation_id or uuid4().hex
+    response.headers["X-CodeGraph-Operation-ID"] = resolved_id
+    return store.reporter(resolved_id)
 
 
 @lru_cache
@@ -234,9 +256,15 @@ QuestionService = Annotated[RepositoryQuestionService, Depends(get_question_serv
 def register_repository(
     request: RepositoryRegistrationRequest,
     service: RepositoryService,
+    response: Response,
+    operation_store: OperationStore,
+    operation_id: OperationHeader = None,
 ) -> RepositoryRegistrationResponse:
     try:
-        return service.register(request)
+        return service.register(
+            request,
+            _operation_reporter(operation_id, response, operation_store),
+        )
     except InvalidGithubUrlError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except GithubRepositoryNotFoundError as error:
@@ -284,9 +312,16 @@ def analyze_snapshot(
     repository_id: str,
     snapshot_id: str,
     service: AnalysisService,
+    response: Response,
+    operation_store: OperationStore,
+    operation_id: OperationHeader = None,
 ) -> SnapshotAnalysis:
     try:
-        return service.analyze_snapshot(repository_id, snapshot_id)
+        return service.analyze_snapshot(
+            repository_id,
+            snapshot_id,
+            _operation_reporter(operation_id, response, operation_store),
+        )
     except (RepositoryNotFoundError, SnapshotNotFoundError) as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except SnapshotNotReadyError as error:
@@ -309,9 +344,16 @@ def persist_snapshot_graph(
     repository_id: str,
     snapshot_id: str,
     service: GraphService,
+    response: Response,
+    operation_store: OperationStore,
+    operation_id: OperationHeader = None,
 ) -> GraphPersistenceStatus:
     try:
-        return service.analyze_and_persist(repository_id, snapshot_id)
+        return service.analyze_and_persist(
+            repository_id,
+            snapshot_id,
+            _operation_reporter(operation_id, response, operation_store),
+        )
     except (RepositoryNotFoundError, SnapshotNotFoundError) as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except SnapshotNotReadyError as error:
@@ -343,6 +385,28 @@ def get_snapshot_graph_status(
         raise HTTPException(status_code=503, detail=str(error)) from error
 
 
+@router.get(
+    "/{repository_id}/snapshots/{snapshot_id}/graph-preview",
+    response_model=GraphNeighborhood,
+)
+def get_snapshot_graph_preview(
+    repository_id: str,
+    snapshot_id: str,
+    service: GraphService,
+    max_nodes: Annotated[int, Query(ge=1, le=100)] = 60,
+) -> GraphNeighborhood:
+    try:
+        return service.get_preview(repository_id, snapshot_id, max_nodes)
+    except (
+        RepositoryNotFoundError,
+        SnapshotNotFoundError,
+        GraphSnapshotNotFoundError,
+    ) as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except GraphStoreError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
 @router.post(
     "/{repository_id}/snapshots/{snapshot_id}/vector-index",
     response_model=VectorIndexStatus,
@@ -351,9 +415,16 @@ def build_snapshot_vector_index(
     repository_id: str,
     snapshot_id: str,
     service: VectorService,
+    response: Response,
+    operation_store: OperationStore,
+    operation_id: OperationHeader = None,
 ) -> VectorIndexStatus:
     try:
-        return service.build_index(repository_id, snapshot_id)
+        return service.build_index(
+            repository_id,
+            snapshot_id,
+            _operation_reporter(operation_id, response, operation_store),
+        )
     except (RepositoryNotFoundError, SnapshotNotFoundError) as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except SnapshotNotReadyError as error:

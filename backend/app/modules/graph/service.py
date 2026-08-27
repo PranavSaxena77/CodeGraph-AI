@@ -10,6 +10,7 @@ from app.domain.graph import GraphNeighborhood, GraphNode, GraphPersistenceStatu
 from app.domain.repositories import RepositoryMetadata, SnapshotMetadata
 from app.modules.graph.port import GraphStore
 from app.modules.ingestion.store import MetadataStore
+from app.modules.operations.port import NULL_OPERATION_REPORTER, OperationReporter
 
 
 class SnapshotAnalyzer(Protocol):
@@ -29,13 +30,46 @@ class GraphPersistenceService:
         self._analyzer = analyzer
         self._graph_store = graph_store
 
-    def analyze_and_persist(self, repository_id: str, snapshot_id: str) -> GraphPersistenceStatus:
-        repository, snapshot = self._get_snapshot(repository_id, snapshot_id)
-        existing = self._graph_store.get_persistence_status(repository_id, snapshot_id)
-        if existing is not None:
-            return existing.model_copy(update={"idempotent": True})
-        analysis = self._analyzer.analyze_snapshot(repository_id, snapshot_id)
-        return self._graph_store.persist_snapshot(repository, snapshot, analysis)
+    def analyze_and_persist(
+        self,
+        repository_id: str,
+        snapshot_id: str,
+        reporter: OperationReporter | None = None,
+    ) -> GraphPersistenceStatus:
+        active_reporter = reporter or NULL_OPERATION_REPORTER
+        if reporter is not None:
+            active_reporter.start_stage("graph")
+        try:
+            repository, snapshot = self._get_snapshot(repository_id, snapshot_id)
+            existing = self._graph_store.get_persistence_status(repository_id, snapshot_id)
+            if existing is not None:
+                status = existing.model_copy(update={"idempotent": True})
+            else:
+                preparation_event = active_reporter.start_event(
+                    "graph", "Preparing deterministic structural records"
+                )
+                analysis = self._analyzer.analyze_snapshot(repository_id, snapshot_id)
+                active_reporter.complete_event(preparation_event)
+                status = self._graph_store.persist_snapshot(
+                    repository,
+                    snapshot,
+                    analysis,
+                    reporter=active_reporter,
+                )
+        except Exception:
+            if reporter is not None:
+                active_reporter.fail_stage("graph")
+            raise
+        if reporter is not None:
+            active_reporter.complete_stage(
+                "graph",
+                {
+                    "nodes": ("Nodes", status.node_count),
+                    "relationships": ("Relationships", status.relationship_count),
+                    "diagnostics": ("Diagnostics", status.diagnostic_count),
+                },
+            )
+        return status
 
     def get_status(self, repository_id: str, snapshot_id: str) -> GraphPersistenceStatus:
         self._get_snapshot(repository_id, snapshot_id)
@@ -84,6 +118,12 @@ class GraphPersistenceService:
             symbol_ids,
             max_neighbors_per_symbol,
         )
+
+    def get_preview(
+        self, repository_id: str, snapshot_id: str, max_nodes: int
+    ) -> GraphNeighborhood:
+        self.get_status(repository_id, snapshot_id)
+        return self._graph_store.get_preview(repository_id, snapshot_id, max_nodes)
 
     def _get_snapshot(
         self, repository_id: str, snapshot_id: str

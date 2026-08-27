@@ -121,6 +121,150 @@ def test_api_registration_is_idempotent(api: tuple[TestClient, InMemoryMetadataS
     assert first.json()["snapshot"]["id"] == second.json()["snapshot"]["id"]
 
 
+def test_api_exposes_only_real_ingestion_events_and_metrics(
+    api: tuple[TestClient, InMemoryMetadataStore],
+) -> None:
+    client, _store = api
+    operation_id = "ingestion-observability"
+
+    response = client.post(
+        "/api/v1/repositories",
+        json={"github_url": "https://github.com/octocat/hello-python"},
+        headers={"X-CodeGraph-Operation-ID": operation_id},
+    )
+    operation = client.get(f"/api/v1/operations/{operation_id}")
+
+    assert response.status_code == 201
+    assert response.headers["X-CodeGraph-Operation-ID"] == operation_id
+    assert operation.status_code == 200
+    payload = operation.json()
+    assert payload["stages"] == {
+        "ingestion": "complete",
+        "analysis": "pending",
+        "graph": "pending",
+        "vector": "pending",
+    }
+    assert {event["stage"] for event in payload["events"]} == {"ingestion"}
+    assert all(event["status"] == "done" for event in payload["events"])
+    assert "Parsing Python ASTs" not in {event["message"] for event in payload["events"]}
+    assert payload["metrics"]["ingestion"] == [
+        {"key": "python_files", "label": "Python files", "value": 1}
+    ]
+
+
+def test_api_operation_events_survive_across_pipeline_requests(
+    api: tuple[TestClient, InMemoryMetadataStore],
+) -> None:
+    client, _store = api
+    operation_id = "cross-request-operation"
+    headers = {"X-CodeGraph-Operation-ID": operation_id}
+    registration = client.post(
+        "/api/v1/repositories",
+        json={"github_url": "https://github.com/octocat/hello-python"},
+        headers=headers,
+    ).json()
+    first_read = client.get(f"/api/v1/operations/{operation_id}").json()
+
+    repository_id = registration["repository"]["id"]
+    snapshot_id = registration["snapshot"]["id"]
+    analysis = client.post(
+        f"/api/v1/repositories/{repository_id}/snapshots/{snapshot_id}/analysis",
+        headers=headers,
+    )
+    second_read = client.get(f"/api/v1/operations/{operation_id}")
+
+    assert analysis.status_code == 200
+    assert second_read.status_code == 200
+    assert {event["id"] for event in first_read["events"]}.issubset(
+        {event["id"] for event in second_read.json()["events"]}
+    )
+    assert {event["stage"] for event in second_read.json()["events"]} == {
+        "ingestion",
+        "analysis",
+    }
+
+
+def test_api_returns_404_for_unknown_operation(
+    api: tuple[TestClient, InMemoryMetadataStore],
+) -> None:
+    client, _store = api
+
+    response = client.get("/api/v1/operations/unknown-operation-id")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Pipeline operation was not found"
+
+
+@pytest.mark.parametrize("origin", ["http://localhost:5173", "http://127.0.0.1:5173"])
+def test_repository_registration_cors_preflight_succeeds(
+    api: tuple[TestClient, InMemoryMetadataStore],
+    origin: str,
+) -> None:
+    client, _store = api
+
+    response = client.options(
+        "/api/v1/repositories",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-codegraph-operation-id",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+    assert "x-codegraph-operation-id" in response.headers["access-control-allow-headers"].lower()
+
+
+def test_api_pipeline_operation_reports_accurate_metrics_and_graph_preview(
+    api: tuple[TestClient, InMemoryMetadataStore],
+) -> None:
+    client, _store = api
+    operation_id = "complete-pipeline-observability"
+    headers = {"X-CodeGraph-Operation-ID": operation_id}
+    registration = client.post(
+        "/api/v1/repositories",
+        json={"github_url": "https://github.com/octocat/hello-python"},
+        headers=headers,
+    ).json()
+    repository_id = registration["repository"]["id"]
+    snapshot_id = registration["snapshot"]["id"]
+    base = f"/api/v1/repositories/{repository_id}/snapshots/{snapshot_id}"
+
+    client.post(f"{base}/analysis", headers=headers)
+    graph = client.post(f"{base}/graph", headers=headers).json()
+    vector = client.post(f"{base}/vector-index", headers=headers).json()
+    operation = client.get(f"/api/v1/operations/{operation_id}").json()
+    preview = client.get(f"{base}/graph-preview?max_nodes=60")
+
+    assert operation["status"] == "complete"
+    assert set(operation["stages"].values()) == {"complete"}
+    metrics = {
+        stage: {metric["key"]: metric["value"] for metric in values}
+        for stage, values in operation["metrics"].items()
+    }
+    assert metrics["analysis"] == {
+        "python_files": 1,
+        "classes": 0,
+        "functions": 1,
+        "methods": 0,
+        "imports": 0,
+        "inheritances": 0,
+        "resolved_calls": 0,
+        "diagnostics": 0,
+    }
+    assert metrics["graph"]["nodes"] == graph["node_count"] == 4
+    assert metrics["graph"]["relationships"] == graph["relationship_count"] == 3
+    assert metrics["vector"]["chunks"] == vector["chunk_count"] == 1
+    assert metrics["vector"]["vectors"] == vector["chunk_count"]
+    assert metrics["vector"]["dimension"] == vector["vector_dimension"] == 32
+    assert preview.status_code == 200
+    assert len(preview.json()["nodes"]) == 3
+    assert len(preview.json()["relationships"]) == 2
+    assert all(node["repository_id"] == repository_id for node in preview.json()["nodes"])
+    assert all(node["snapshot_id"] == snapshot_id for node in preview.json()["nodes"])
+
+
 def test_api_analyzes_an_ingested_snapshot(api: tuple[TestClient, InMemoryMetadataStore]) -> None:
     client, _store = api
     registration = client.post(

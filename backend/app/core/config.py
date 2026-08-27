@@ -19,7 +19,7 @@ class Settings(BaseSettings):
 
     app_name: str = "CodeGraph AI"
     app_version: str = "0.1.0"
-    cors_origins: str = "http://localhost:5173"
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     mongodb_host: str = "127.0.0.1"
     mongodb_port: int = Field(default=27017, ge=1, le=65535)
     mongodb_database: str = "codegraph_ai"
@@ -58,8 +58,15 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> list[str]:
-        """Return normalized CORS origins from a comma-separated setting."""
-        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        """Return configured origins, including equivalent local development hosts."""
+        origins = [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+        expanded = list(origins)
+        for origin in origins:
+            if origin.startswith("http://localhost:"):
+                expanded.append(origin.replace("http://localhost:", "http://127.0.0.1:", 1))
+            elif origin.startswith("http://127.0.0.1:"):
+                expanded.append(origin.replace("http://127.0.0.1:", "http://localhost:", 1))
+        return list(dict.fromkeys(expanded))
 
     @property
     def mongodb_uri(self) -> str:
