@@ -9,6 +9,7 @@ from app.domain.graph import (
     GraphRelationshipType,
 )
 from app.domain.repositories import RepositoryMetadata, SnapshotMetadata
+from app.modules.operations.port import OperationReporter
 
 _NODE_TYPES = {
     "file": "File",
@@ -32,7 +33,9 @@ class FakeGraphStore:
         repository: RepositoryMetadata,
         snapshot: SnapshotMetadata,
         analysis: SnapshotAnalysis,
+        reporter: OperationReporter | None = None,
     ) -> GraphPersistenceStatus:
+        del reporter
         key = (repository.id, snapshot.id)
         existing = self.statuses.get(key)
         if existing is not None:
@@ -267,6 +270,26 @@ class FakeGraphStore:
                 key=lambda item: item.id,
             ),
         )
+
+    def get_preview(
+        self, repository_id: str, snapshot_id: str, max_nodes: int
+    ) -> GraphNeighborhood:
+        if max_nodes < 1 or max_nodes > 100:
+            raise ValueError("max_nodes must be between 1 and 100")
+        nodes = [
+            deepcopy(node)
+            for node in self._snapshot_nodes(snapshot_id)
+            if node.repository_id == repository_id and node.node_type != "Repository"
+        ][:max_nodes]
+        node_ids = {node.id for node in nodes}
+        relationships = [
+            deepcopy(relationship)
+            for relationship in self._snapshot_relationships(snapshot_id)
+            if relationship.repository_id == repository_id
+            and relationship.source_id in node_ids
+            and relationship.target_id in node_ids
+        ]
+        return GraphNeighborhood(nodes=nodes, relationships=relationships)
 
     def _add_symbol(
         self,

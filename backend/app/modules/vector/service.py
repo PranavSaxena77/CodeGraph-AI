@@ -16,6 +16,7 @@ from app.modules.analysis.chunking import SemanticChunker, chunk_embedding_text
 from app.modules.analysis.service import AnalyzedSnapshotSource
 from app.modules.embeddings.port import EmbeddingProvider
 from app.modules.ingestion.store import MetadataStore
+from app.modules.operations.port import NULL_OPERATION_REPORTER, OperationReporter
 from app.modules.vector.faiss_store import INDEX_VERSION
 from app.modules.vector.port import VectorIndex
 
@@ -43,24 +44,79 @@ class VectorRetrievalService:
         self._embedding_provider = embedding_provider
         self._vector_index = vector_index
 
-    def build_index(self, repository_id: str, snapshot_id: str) -> VectorIndexStatus:
-        repository, snapshot = self._get_snapshot(repository_id, snapshot_id)
-        spec = self._spec(repository.id, snapshot.id, snapshot.commit_sha)
-        existing = self._vector_index.get_status(spec)
-        if existing is not None:
-            return existing.model_copy(update={"idempotent": True})
-
-        analyzed = self._analyzer.analyze_snapshot_source(repository_id, snapshot_id)
-        chunks = self._chunker.build_chunks(
-            analyzed.repository,
-            analyzed.snapshot,
-            analyzed.analysis,
-            analyzed.sources,
-        )
-        vectors = self._embedding_provider.embed_documents(
-            [chunk_embedding_text(chunk) for chunk in chunks]
-        )
-        return self._vector_index.build_index(spec, chunks, vectors)
+    def build_index(
+        self,
+        repository_id: str,
+        snapshot_id: str,
+        reporter: OperationReporter | None = None,
+    ) -> VectorIndexStatus:
+        active_reporter = reporter or NULL_OPERATION_REPORTER
+        if reporter is not None:
+            active_reporter.start_stage("vector")
+        try:
+            repository, snapshot = self._get_snapshot(repository_id, snapshot_id)
+            spec = self._spec(repository.id, snapshot.id, snapshot.commit_sha)
+            existing = self._vector_index.get_status(spec)
+            if existing is not None:
+                status = existing.model_copy(update={"idempotent": True})
+            else:
+                analysis_event = active_reporter.start_event(
+                    "vector", "Loading analyzed snapshot source"
+                )
+                analyzed = self._analyzer.analyze_snapshot_source(repository_id, snapshot_id)
+                active_reporter.complete_event(analysis_event)
+                chunks_event = active_reporter.start_event(
+                    "vector", "Generating evidence-preserving semantic chunks"
+                )
+                chunks = self._chunker.build_chunks(
+                    analyzed.repository,
+                    analyzed.snapshot,
+                    analyzed.analysis,
+                    analyzed.sources,
+                )
+                active_reporter.complete_event(
+                    chunks_event,
+                    metric_key="chunks",
+                    metric_label="Chunks",
+                    metric_value=len(chunks),
+                )
+                embedding_event = active_reporter.start_event(
+                    "vector", "Generating embedding vectors"
+                )
+                vectors = self._embedding_provider.embed_documents(
+                    [chunk_embedding_text(chunk) for chunk in chunks]
+                )
+                active_reporter.complete_event(
+                    embedding_event,
+                    metric_key="vectors",
+                    metric_label="Vectors",
+                    metric_value=len(vectors),
+                )
+                index_event = active_reporter.start_event(
+                    "vector", "Constructing and persisting FAISS index artifacts"
+                )
+                status = self._vector_index.build_index(spec, chunks, vectors)
+                active_reporter.complete_event(
+                    index_event,
+                    metric_key="index_vectors",
+                    metric_label="FAISS vectors",
+                    metric_value=status.chunk_count,
+                )
+        except Exception:
+            if reporter is not None:
+                active_reporter.fail_stage("vector")
+            raise
+        if reporter is not None:
+            active_reporter.complete_stage(
+                "vector",
+                {
+                    "chunks": ("Chunks", status.chunk_count),
+                    "vectors": ("Vectors", status.chunk_count),
+                    "dimension": ("Dimensions", status.vector_dimension),
+                    "faiss_vectors": ("FAISS vectors", status.chunk_count),
+                },
+            )
+        return status
 
     def get_status(self, repository_id: str, snapshot_id: str) -> VectorIndexStatus:
         repository, snapshot = self._get_snapshot(repository_id, snapshot_id)

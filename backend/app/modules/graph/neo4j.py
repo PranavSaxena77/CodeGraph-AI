@@ -13,6 +13,7 @@ from app.domain.graph import (
     GraphRelationship,
 )
 from app.domain.repositories import RepositoryMetadata, SnapshotMetadata
+from app.modules.operations.port import NULL_OPERATION_REPORTER, OperationReporter
 
 _SYMBOL_LABELS = {
     "class": "Class",
@@ -40,6 +41,7 @@ class Neo4jGraphStore:
         repository: RepositoryMetadata,
         snapshot: SnapshotMetadata,
         analysis: SnapshotAnalysis,
+        reporter: OperationReporter | None = None,
     ) -> GraphPersistenceStatus:
         if analysis.snapshot_id != snapshot.id:
             raise GraphStoreError("Analysis and snapshot identities do not match")
@@ -47,13 +49,28 @@ class Neo4jGraphStore:
         if existing is not None:
             return existing.model_copy(update={"idempotent": True})
 
+        active_reporter = reporter or NULL_OPERATION_REPORTER
+        schema_event = active_reporter.start_event("graph", "Preparing graph schema")
         self._ensure_schema()
+        active_reporter.complete_event(schema_event)
         files = [symbol for symbol in analysis.symbols if symbol.symbol_type == "file"]
         symbols = [symbol for symbol in analysis.symbols if symbol.symbol_type != "file"]
         file_ids = {record.file_path: record.id for record in files}
 
+        snapshot_event = active_reporter.start_event(
+            "graph", "Creating repository and snapshot nodes"
+        )
         self._write_repository_snapshot(repository, snapshot, len(analysis.diagnostics))
+        active_reporter.complete_event(snapshot_event)
+        files_event = active_reporter.start_event("graph", "Persisting file nodes")
         self._write_files(repository.id, snapshot, files)
+        active_reporter.complete_event(
+            files_event,
+            metric_key="files",
+            metric_label="File nodes",
+            metric_value=len(files),
+        )
+        symbols_event = active_reporter.start_event("graph", "Persisting symbol nodes")
         for symbol_type, label in _SYMBOL_LABELS.items():
             self._write_symbols(
                 repository.id,
@@ -61,10 +78,46 @@ class Neo4jGraphStore:
                 label,
                 [record for record in symbols if record.symbol_type == symbol_type],
             )
+        active_reporter.complete_event(
+            symbols_event,
+            metric_key="symbols",
+            metric_label="Symbol nodes",
+            metric_value=len(symbols),
+        )
+        declarations_event = active_reporter.start_event(
+            "graph", "Persisting DECLARES and CONTAINS relationships"
+        )
         self._write_declarations(repository.id, snapshot.id, symbols, file_ids)
+        active_reporter.complete_event(declarations_event)
+        imports_event = active_reporter.start_event("graph", "Persisting IMPORTS relationships")
         self._write_imports(repository.id, snapshot.id, analysis)
+        active_reporter.complete_event(
+            imports_event,
+            metric_key="resolved_imports",
+            metric_label="Resolved imports",
+            metric_value=sum(record.resolution == "resolved" for record in analysis.imports),
+        )
+        inheritance_event = active_reporter.start_event(
+            "graph", "Persisting INHERITS relationships"
+        )
         self._write_inheritances(repository.id, snapshot.id, analysis)
+        active_reporter.complete_event(
+            inheritance_event,
+            metric_key="resolved_inheritances",
+            metric_label="Resolved inheritances",
+            metric_value=sum(record.resolution == "resolved" for record in analysis.inheritances),
+        )
+        calls_event = active_reporter.start_event(
+            "graph", "Persisting resolved CALLS relationships"
+        )
         self._write_calls(repository.id, snapshot.id, analysis)
+        active_reporter.complete_event(
+            calls_event,
+            metric_key="resolved_calls",
+            metric_label="Resolved calls",
+            metric_value=sum(record.resolution == "resolved" for record in analysis.calls),
+        )
+        verification_event = active_reporter.start_event("graph", "Verifying graph persistence")
         self._execute(
             """
             MATCH (snapshot:Snapshot {id: $snapshot_id, repository_id: $repository_id})
@@ -76,6 +129,12 @@ class Neo4jGraphStore:
         status = self.get_persistence_status(repository.id, snapshot.id)
         if status is None:
             raise GraphStoreError("Neo4j graph persistence could not be verified")
+        active_reporter.complete_event(
+            verification_event,
+            metric_key="nodes",
+            metric_label="Nodes",
+            metric_value=status.node_count,
+        )
         return status.model_copy(update={"idempotent": False})
 
     def get_persistence_status(
@@ -353,6 +412,63 @@ class Neo4jGraphStore:
         return GraphNeighborhood(
             nodes=sorted(nodes.values(), key=lambda node: node.id),
             relationships=sorted(relationships.values(), key=lambda item: item.id),
+        )
+
+    def get_preview(
+        self, repository_id: str, snapshot_id: str, max_nodes: int
+    ) -> GraphNeighborhood:
+        if max_nodes < 1 or max_nodes > 100:
+            raise ValueError("max_nodes must be between 1 and 100")
+        node_rows = self._execute(
+            """
+            MATCH (node)
+            WHERE node.repository_id = $repository_id
+              AND (node.snapshot_id = $snapshot_id OR node.id = $snapshot_id)
+            RETURN node
+            ORDER BY CASE WHEN node.node_type = 'Snapshot' THEN 0 ELSE 1 END,
+                     node.file_path,
+                     CASE node.node_type
+                       WHEN 'File' THEN 0
+                       WHEN 'Class' THEN 1
+                       WHEN 'Function' THEN 2
+                       WHEN 'Method' THEN 3
+                       ELSE 4
+                     END,
+                     node.start_line,
+                     node.id
+            LIMIT $max_nodes
+            """,
+            {
+                "repository_id": repository_id,
+                "snapshot_id": snapshot_id,
+                "max_nodes": max_nodes,
+            },
+        )
+        nodes = [self._node_from_value(row["node"]) for row in node_rows]
+        node_ids = [node.id for node in nodes]
+        if not node_ids:
+            return GraphNeighborhood()
+        relationship_rows = self._execute(
+            """
+            MATCH (source)-[relationship]->(target)
+            WHERE relationship.repository_id = $repository_id
+              AND relationship.snapshot_id = $snapshot_id
+              AND source.id IN $node_ids
+              AND target.id IN $node_ids
+            RETURN relationship
+            ORDER BY type(relationship), relationship.id
+            """,
+            {
+                "repository_id": repository_id,
+                "snapshot_id": snapshot_id,
+                "node_ids": node_ids,
+            },
+        )
+        return GraphNeighborhood(
+            nodes=nodes,
+            relationships=[
+                self._relationship_from_value(row["relationship"]) for row in relationship_rows
+            ],
         )
 
     def close(self) -> None:
